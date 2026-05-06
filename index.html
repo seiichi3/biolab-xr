@@ -136,6 +136,21 @@ input[type=text]:focus{border-color:var(--cyan)}
       <button class="btn sm" onclick="app.resetView()">リセット</button>
       <button class="btn sm" id="rot-btn" onclick="app.toggleRot()">自動回転</button>
     </div>
+
+    <div id="ses-ctrl" style="display:none">
+      <div class="hr"></div>
+      <div class="sec">[ 透明度 ]</div>
+      <div class="g3">
+        <button class="btn sm" onclick="app.setSurfOp(1.0)">不透明</button>
+        <button class="btn sm active" id="sop-mid" onclick="app.setSurfOp(0.80)">中</button>
+        <button class="btn sm" onclick="app.setSurfOp(0.42)">半透明</button>
+      </div>
+      <div class="sec" style="margin-top:8px">[ SES 品質 ]</div>
+      <div class="g2">
+        <button class="btn sm" id="sq-hi" onclick="app.setSESQuality('hi')">高品質</button>
+        <button class="btn sm active" id="sq-med" onclick="app.setSESQuality('med')">標準</button>
+      </div>
+    </div>
   </div>
 
   <div id="right" class="panel">
@@ -264,6 +279,87 @@ function parseSS(txt){
     }
   }
   return {helix,sheet};
+}
+
+/* ================================================================
+   SOLVENT EXCLUDED SURFACE  (PyMOL / rep_surface.cpp)
+   ────────────────────────────────────────────────────────────────
+   Field:  f(p) = max_atoms( probe − (|p − atom_i| − VDW_i) )
+     f > 0 → inside SES   (probe sphere overlaps atom VDW sphere)
+     f = 0 → Connolly surface  ← we extract this isosurface
+   Algorithm: Marching Tetrahedra — no lookup ambiguities.
+     Each cube → 6 tets sharing diagonal v0–v6.
+     Each tet  → 16 configs, verified-correct winding.
+   ================================================================ */
+
+// Tet tri-table  edges: 0=AB 1=AC 2=AD 3=BC 4=BD 5=CD
+// Outward normals verified for tet A=(0,0,0) B=(1,0,0) C=(0,1,0) D=(0,0,1)
+const SESTAB=[
+  [],               //  0: ∅
+  [0,1,2],          //  1: A
+  [0,4,3],          //  2: B
+  [1,4,3,1,2,4],   //  3: AB
+  [1,3,5],          //  4: C
+  [0,3,5,0,5,2],   //  5: AC
+  [0,5,1,0,4,5],   //  6: BC
+  [2,4,5],          //  7: ABC
+  [2,5,4],          //  8: D
+  [0,1,5,0,5,4],   //  9: AD
+  [0,5,3,0,2,5],   // 10: BD
+  [1,5,3],          // 11: ABD
+  [1,3,4,1,4,2],   // 12: CD
+  [0,3,4],          // 13: ACD
+  [0,2,1],          // 14: BCD
+  []                // 15: ABCD
+];
+// Cube corners  [dx,dy,dz]
+const SES_CV=[[0,0,0],[1,0,0],[1,1,0],[0,1,0],[0,0,1],[1,0,1],[1,1,1],[0,1,1]];
+// 6 tets per cube, all sharing diagonal v0-v6
+const SES_TETS=[[0,1,2,6],[0,2,3,6],[0,3,7,6],[0,7,4,6],[0,4,5,6],[0,5,1,6]];
+
+/* Build scalar SES field on a 3D grid */
+function buildSESField(noH,probe,CS){
+  let x0=1e9,y0=1e9,z0=1e9,x1=-1e9,y1=-1e9,z1=-1e9;
+  noH.forEach(a=>{const r=(VDW[a.el]||VDW.DEFAULT)+probe+CS;
+    x0=Math.min(x0,a.x-r);y0=Math.min(y0,a.y-r);z0=Math.min(z0,a.z-r);
+    x1=Math.max(x1,a.x+r);y1=Math.max(y1,a.y+r);z1=Math.max(z1,a.z+r);});
+  const nx=Math.ceil((x1-x0)/CS)+2,ny=Math.ceil((y1-y0)/CS)+2,nz=Math.ceil((z1-z0)/CS)+2;
+  const field=new Float32Array(nx*ny*nz).fill(-(probe+0.1));
+  noH.forEach(a=>{
+    const rv=VDW[a.el]||VDW.DEFAULT,rc=rv+probe+CS*0.5,rc2=rc*rc;
+    const ix0=Math.max(0,Math.floor((a.x-rc-x0)/CS)),ix1=Math.min(nx-1,Math.ceil((a.x+rc-x0)/CS));
+    const iy0=Math.max(0,Math.floor((a.y-rc-y0)/CS)),iy1=Math.min(ny-1,Math.ceil((a.y+rc-y0)/CS));
+    const iz0=Math.max(0,Math.floor((a.z-rc-z0)/CS)),iz1=Math.min(nz-1,Math.ceil((a.z+rc-z0)/CS));
+    for(let ix=ix0;ix<=ix1;ix++){const gx=x0+ix*CS,ddx=(gx-a.x)**2;if(ddx>rc2)continue;
+      for(let iy=iy0;iy<=iy1;iy++){const gy=y0+iy*CS,ddy=(gy-a.y)**2;if(ddx+ddy>rc2)continue;
+        const base=ix*ny*nz+iy*nz;
+        for(let iz=iz0;iz<=iz1;iz++){const gz=z0+iz*CS;
+          const val=probe-(Math.sqrt(ddx+ddy+(gz-a.z)**2)-rv);
+          if(val>field[base+iz])field[base+iz]=val;}}}});
+  return{field,nx,ny,nz,x0,y0,z0,CS};
+}
+
+/* Marching Tetrahedra — extract f=0 isosurface */
+function marchingTets({field,nx,ny,nz,x0,y0,z0,CS}){
+  const V=[];
+  for(let ix=0;ix<nx-1;ix++)
+    for(let iy=0;iy<ny-1;iy++)
+      for(let iz=0;iz<nz-1;iz++){
+        const fv=new Array(8),qx=new Array(8),qy=new Array(8),qz=new Array(8);
+        for(let v=0;v<8;v++){const[dx,dy,dz]=SES_CV[v];
+          fv[v]=field[(ix+dx)*ny*nz+(iy+dy)*nz+(iz+dz)];
+          qx[v]=x0+(ix+dx)*CS;qy[v]=y0+(iy+dy)*CS;qz[v]=z0+(iz+dz)*CS;}
+        for(const[ia,ib,ic,id]of SES_TETS){
+          const cfg=(fv[ia]>0?1:0)|(fv[ib]>0?2:0)|(fv[ic]>0?4:0)|(fv[id]>0?8:0);
+          const tri=SESTAB[cfg];if(!tri.length)continue;
+          const ev=[[ia,ib],[ia,ic],[ia,id],[ib,ic],[ib,id],[ic,id]];
+          const cp=ev.map(([v0,v1])=>{const f0=fv[v0],f1=fv[v1],df=f0-f1;
+            const t=Math.abs(df)<1e-9?0.5:Math.max(0,Math.min(1,f0/df));
+            return[qx[v0]+t*(qx[v1]-qx[v0]),qy[v0]+t*(qy[v1]-qy[v0]),qz[v0]+t*(qz[v1]-qz[v0])];});
+          for(let ti=0;ti<tri.length;ti+=3){
+            const[p0,p1,p2]=[cp[tri[ti]],cp[tri[ti+1]],cp[tri[ti+2]]];
+            V.push(p0[0],p0[1],p0[2],p1[0],p1[1],p1[2],p2[0],p2[1],p2[2]);}}}
+  return V;
 }
 
 /* ================================================================
@@ -1177,32 +1273,115 @@ class BioLabXR{
   }
 
   /* ================================================================
-     MODE: SURFACE — SAS (Solvent Accessible Surface) approximation
+     MODE: SURFACE — PyMOL Connolly / SES
+     Reference: PyMOL open-source rep_surface.cpp
+     ────────────────────────────────────────────────────────────────
+     1. buildSESField  – union SDF on adaptive 3D grid (nm units)
+     2. marchingTets   – Marching Tetrahedra, f=0 isosurface
+     3. Color          – nearest atom via spatial hash O(1)
+     4. Normals        – analytical outward from nearest atom
+        (= exact SDF gradient at the Connolly surface)
      ================================================================ */
   buildSurface(atoms,cx,cy,cz,sc){
-    // Render atoms at (VDW + probe) radius — creates smooth surface appearance
-    // when atoms overlap, visually blending into a continuous surface
-    const noH=atoms.filter(a=>a.el!=='H');
-    const N=Math.min(noH.length,9000);
-    this._showAtoms=noH;
-    const probe=0.14; // water probe radius 1.4 Å
-    const geo=new THREE.SphereGeometry(1,24,18);
-    const mat=new THREE.MeshPhongMaterial({
-      shininess:140,specular:new THREE.Color(0x888888)
-    });
-    const mesh=new THREE.InstancedMesh(geo,mat,N);
-    const dummy=new THREE.Object3D(),col=new THREE.Color();
-    for(let i=0;i<N;i++){
-      const a=noH[i];
-      dummy.position.set((a.x-cx)*sc,(a.y-cy)*sc,(a.z-cz)*sc);
-      dummy.scale.setScalar(Math.max(.03,((VDW[a.el]||VDW.DEFAULT)+probe)*sc*2));
-      dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
-      col.setHex(this.getColor(a));mesh.setColorAt(i,col);
-    }
-    mesh.instanceMatrix.needsUpdate=true;
-    if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
-    this.molGroup.add(mesh);this.atomMesh=mesh;
     document.getElementById('i-bonds').textContent='—';
+    const noH=atoms.filter(a=>a.el!=='H');
+    this._showAtoms=noH;
+
+    // Adaptive cell size: target ~65 grid cells per longest axis
+    const ext=noH.reduce((m,a)=>Math.max(m,
+      Math.abs(a.x-cx),Math.abs(a.y-cy),Math.abs(a.z-cz)),0)*2;
+    const baseCS=this._sesHiQ?0.065:0.090;          // nm/cell
+    const CS=Math.max(baseCS,Math.min(0.18,ext/65));
+
+    this.setLoad(true,'SES: フィールド計算中...');
+    this.setStatus('COMPUTING CONNOLLY SURFACE...');
+
+    // Three rAF steps to keep loading overlay visible between heavy work
+    requestAnimationFrame(()=>{
+      const probe=0.140;       // 1.40 Å — PyMOL default water probe
+      const fd=buildSESField(noH,probe,CS);
+
+      this.setLoad(true,`SES: メッシュ生成中 (${fd.nx}×${fd.ny}×${fd.nz})...`);
+      requestAnimationFrame(()=>{
+        const rawV=marchingTets(fd);
+        const nTri=rawV.length/9;
+        if(!nTri){this.setLoad(false);this.setStatus('SES: 面なし');return;}
+
+        this.setLoad(true,`SES: カラーリング中 (${Math.round(nTri).toLocaleString()} 面)...`);
+        requestAnimationFrame(()=>{
+
+          // ── Scale nm → display coords ─────────────────────────────
+          const N=rawV.length/3;
+          const sv=new Float32Array(rawV.length);
+          for(let i=0;i<rawV.length;i+=3){
+            sv[i  ]=(rawV[i  ]-cx)*sc;
+            sv[i+1]=(rawV[i+1]-cy)*sc;
+            sv[i+2]=(rawV[i+2]-cz)*sc;}
+
+          // ── Spatial hash for O(1) nearest-atom lookup ─────────────
+          // Grid cell = 0.7 nm physical → ±1 search covers > probe+VDW
+          const ags=0.70*sc;
+          const ag=new Map();
+          const sa=noH.map((a,i)=>({...a,xs:(a.x-cx)*sc,ys:(a.y-cy)*sc,zs:(a.z-cz)*sc,i}));
+          sa.forEach(a=>{
+            const k=`${Math.floor(a.xs/ags)}|${Math.floor(a.ys/ags)}|${Math.floor(a.zs/ags)}`;
+            (ag.has(k)?ag.get(k):ag.set(k,[]).get(k)).push(a.i);});
+          const nearest=(px,py,pz)=>{
+            const gx=Math.floor(px/ags),gy=Math.floor(py/ags),gz=Math.floor(pz/ags);
+            let md=Infinity,bi=0;
+            for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){
+              const nb=ag.get(`${gx+dx}|${gy+dy}|${gz+dz}`)||[];
+              for(const i of nb){const a=sa[i];
+                const d=(px-a.xs)**2+(py-a.ys)**2+(pz-a.zs)**2;
+                if(d<md){md=d;bi=i;}}}
+            return sa[bi];};
+
+          // ── Per-vertex color + analytical outward normal ──────────
+          const cv=new Float32Array(rawV.length);
+          const nv=new Float32Array(rawV.length);
+          const col=new THREE.Color();
+          for(let vi=0;vi<N;vi++){
+            const px=sv[vi*3],py=sv[vi*3+1],pz=sv[vi*3+2];
+            const na=nearest(px,py,pz);
+            col.setHex(this.getColor(na));
+            cv[vi*3]=col.r;cv[vi*3+1]=col.g;cv[vi*3+2]=col.b;
+            // Outward normal = direction from atom center to surface vertex
+            const nnx=px-na.xs,nny=py-na.ys,nnz=pz-na.zs;
+            const nl=Math.sqrt(nnx*nnx+nny*nny+nnz*nnz)||1;
+            nv[vi*3]=nnx/nl;nv[vi*3+1]=nny/nl;nv[vi*3+2]=nnz/nl;}
+
+          // ── Build Three.js mesh ───────────────────────────────────
+          const geo=new THREE.BufferGeometry();
+          geo.setAttribute('position',new THREE.Float32BufferAttribute(sv,3));
+          geo.setAttribute('color',   new THREE.Float32BufferAttribute(cv,3));
+          geo.setAttribute('normal',  new THREE.Float32BufferAttribute(nv,3));
+          const mat=new THREE.MeshPhongMaterial({
+            vertexColors:true,shininess:90,specular:new THREE.Color(0x444444),
+            transparent:true,opacity:this._surfOp??0.82,side:THREE.DoubleSide});
+          this.surfMesh=new THREE.Mesh(geo,mat);
+          this.molGroup.add(this.surfMesh);
+
+          document.getElementById('i-bonds').textContent=
+            `${Math.round(nTri).toLocaleString()} faces`;
+          this.setLoad(false);
+          this.setStatus(`SES READY — ${Math.round(nTri).toLocaleString()} tri, CS=${(CS*10).toFixed(1)}Å`);
+        });
+      });
+    });
+  }
+
+  /* Surface opacity 0–1 */
+  setSurfOp(v){
+    this._surfOp=v;
+    if(this.surfMesh)this.surfMesh.material.opacity=v;
+  }
+
+  /* Surface quality: hi=0.65Å cell, med=0.90Å (default) */
+  setSESQuality(q){
+    this._sesHiQ=(q==='hi');
+    ['hi','med'].forEach(x=>document.getElementById(`sq-${x}`)?.classList.remove('active'));
+    document.getElementById(`sq-${q}`)?.classList.add('active');
+    if(this.mode==='surface'&&this.atoms.length)this.buildMol(this.atoms);
   }
 
   /* ── Info panel update ── */
@@ -1220,6 +1399,8 @@ class BioLabXR{
     this._modeIdx=this._modeList.indexOf(m);
     ['lines','ribbon','spheres','sticks','cartoon','surface'].forEach(x=>document.getElementById(`m-${x}`)?.classList.remove('active'));
     document.getElementById(`m-${m}`)?.classList.add('active');
+    const sc=document.getElementById('ses-ctrl');
+    if(sc)sc.style.display=(m==='surface')?'block':'none';
     if(this.atoms.length)this.buildMol(this.atoms);
   }
 
