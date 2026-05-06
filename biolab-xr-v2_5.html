@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>BioLab XR v2 — VRタンパク質構造ビューア</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#020b16; --surface:#061523; --border:#0d2840;
+  --cyan:#00e5c8; --cyan-dim:#007a6a; --purple:#9b59ff;
+  --orange:#ff7b2c; --red:#ff2d55; --text:#b8d4ea; --dim:#3d5a7a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Share Tech Mono','Courier New',monospace}
+canvas#c{position:fixed;top:0;left:0;width:100%;height:100%;display:block}
+#ui{position:fixed;inset:0;pointer-events:none;z-index:10}
+.panel{background:rgba(6,21,35,.9);border:1px solid var(--border);backdrop-filter:blur(10px);pointer-events:all;border-radius:4px}
+#topbar{position:absolute;top:0;left:0;right:0;height:52px;display:flex;align-items:center;padding:0 20px;gap:16px;background:rgba(2,11,22,.96);border-bottom:1px solid var(--border)}
+#logo{font-family:'Orbitron',monospace;font-size:18px;font-weight:900;color:var(--cyan);letter-spacing:3px}
+#logo em{color:var(--purple);font-style:normal}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 8px var(--cyan);animation:blink 2.4s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+#status{font-size:11px;color:var(--dim);letter-spacing:2px}
+#fps{margin-left:auto;font-size:11px;color:var(--dim)}
+#left{position:absolute;top:68px;left:14px;width:272px;padding:14px}
+.sec{font-size:10px;letter-spacing:3px;color:var(--cyan);margin:0 0 9px;text-transform:uppercase}
+.row{display:flex;gap:6px;margin-bottom:11px}
+input[type=text]{flex:1;background:rgba(0,229,200,.04);border:1px solid var(--border);border-radius:3px;padding:7px 10px;color:var(--cyan);font-family:'Orbitron',monospace;font-size:14px;letter-spacing:3px;text-transform:uppercase;outline:none;transition:border .2s}
+input[type=text]:focus{border-color:var(--cyan)}
+.btn{background:transparent;border:1px solid var(--dim);color:var(--text);padding:7px 10px;border-radius:3px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1px;transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--cyan);color:var(--cyan);background:rgba(0,229,200,.06)}
+.btn.active{border-color:var(--cyan);color:var(--bg);background:var(--cyan)}
+.btn.sm{padding:5px 8px;font-size:10px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:11px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:11px}
+.col{display:flex;flex-direction:column;gap:5px;margin-bottom:11px}
+.hr{height:1px;background:var(--border);margin:10px 0}
+#right{position:absolute;top:68px;right:14px;width:248px;padding:14px}
+.kv{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(13,40,64,.5);font-size:12px}
+.kv-k{color:var(--dim);font-size:10px;letter-spacing:1px}
+.kv-v{color:var(--text)}
+.kv-v.c{color:var(--cyan)}
+.kv-v.p{color:var(--purple)}
+#loading{position:fixed;inset:0;background:rgba(2,11,22,.92);display:none;flex-direction:column;align-items:center;justify-content:center;z-index:100}
+.spinner{width:52px;height:52px;border:2px solid var(--border);border-top:2px solid var(--cyan);border-radius:50%;animation:spin .9s linear infinite;margin-bottom:18px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#load-txt{font-size:13px;color:var(--cyan);letter-spacing:3px}
+#ctrl-help{position:absolute;bottom:72px;left:50%;transform:translateX(-50%);display:flex;gap:18px;font-size:10px;color:var(--dim);white-space:nowrap}
+.ci{display:flex;align-items:center;gap:5px}
+.ck{padding:2px 6px;border:1px solid var(--border);border-radius:2px;color:var(--text);font-size:10px}
+#vr-wrap{position:absolute;bottom:20px;left:50%;transform:translateX(-50%)}
+#vr-btn{padding:11px 28px;font-family:'Orbitron',monospace;font-size:12px;font-weight:700;letter-spacing:4px;border:2px solid var(--cyan);background:rgba(0,229,200,.08);color:var(--cyan);cursor:pointer;border-radius:4px;transition:all .3s;text-transform:uppercase}
+#vr-btn:hover{background:rgba(0,229,200,.18);box-shadow:0 0 28px rgba(0,229,200,.3)}
+#scan{position:fixed;inset:0;pointer-events:none;z-index:5;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,200,.01) 2px,rgba(0,229,200,.01) 4px)}
+.br{position:absolute;width:18px;height:18px;pointer-events:none}
+.br.tl{top:53px;left:0;border-top:2px solid var(--cyan-dim);border-left:2px solid var(--cyan-dim)}
+.br.tr{top:53px;right:0;border-top:2px solid var(--cyan-dim);border-right:2px solid var(--cyan-dim)}
+.br.bl{bottom:0;left:0;border-bottom:2px solid var(--cyan-dim);border-left:2px solid var(--cyan-dim)}
+.br.br2{bottom:0;right:0;border-bottom:2px solid var(--cyan-dim);border-right:2px solid var(--cyan-dim)}
+/* Mode icon colors */
+.btn[data-m=lines]{border-color:#4a88cc}
+.btn[data-m=ribbon]{border-color:#44bb88}
+.btn[data-m=spheres]{border-color:#cc6644}
+.btn[data-m=sticks]{border-color:#ccaa44}
+.btn[data-m=cartoon]{border-color:#9b59ff}
+.btn[data-m=surface]{border-color:#cc4488}
+.btn[data-m=lines].active{background:#4a88cc;border-color:#4a88cc}
+.btn[data-m=ribbon].active{background:#44bb88;border-color:#44bb88}
+.btn[data-m=spheres].active{background:#cc6644;border-color:#cc6644}
+.btn[data-m=sticks].active{background:#ccaa44;border-color:#ccaa44}
+.btn[data-m=cartoon].active{background:#9b59ff;border-color:#9b59ff}
+.btn[data-m=surface].active{background:#cc4488;border-color:#cc4488}
+.btn[data-m].active{color:#020b16}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="scan"></div>
+<div id="loading"><div class="spinner"></div><div id="load-txt">INITIALIZING...</div></div>
+
+<div id="ui">
+  <div class="br tl"></div><div class="br tr"></div>
+  <div class="br bl"></div><div class="br br2"></div>
+
+  <div id="topbar">
+    <div id="logo">Bio<em>Lab</em> XR</div>
+    <div class="dot"></div>
+    <div id="status">SYSTEM ONLINE</div>
+    <div id="fps">-- FPS</div>
+  </div>
+
+  <div id="left" class="panel">
+    <div class="sec">[ PDB ロード ]</div>
+    <div class="row">
+      <input type="text" id="pdb-in" value="1CRN" maxlength="4" placeholder="PDB ID">
+      <button class="btn" onclick="app.loadPDB()">LOAD</button>
+    </div>
+
+    <div class="sec">[ プリセット ]</div>
+    <div class="g3">
+      <button class="btn sm" onclick="app.preset('1CRN')">クラムビン</button>
+      <button class="btn sm" onclick="app.preset('6LU7')">COVID-19</button>
+      <button class="btn sm" onclick="app.preset('1HHO')">ヘモグロビン</button>
+      <button class="btn sm" onclick="app.preset('2HHB')">デオキシHb</button>
+      <button class="btn sm" onclick="app.preset('1BNA')">DNA螺旋</button>
+      <button class="btn sm" onclick="app.preset('3PTB')">トリプシン</button>
+    </div>
+    <div class="hr"></div>
+
+    <div class="sec">[ 表示モード ]</div>
+    <div class="g2">
+      <button class="btn active" id="m-lines" data-m="lines" onclick="app.setMode('lines')">📏 Lines</button>
+      <button class="btn" id="m-ribbon" data-m="ribbon" onclick="app.setMode('ribbon')">〰 Ribbon</button>
+      <button class="btn" id="m-spheres" data-m="spheres" onclick="app.setMode('spheres')">● Spheres</button>
+      <button class="btn" id="m-sticks" data-m="sticks" onclick="app.setMode('sticks')">⬤ Sticks</button>
+      <button class="btn" id="m-cartoon" data-m="cartoon" onclick="app.setMode('cartoon')">🎀 Cartoon</button>
+      <button class="btn" id="m-surface" data-m="surface" onclick="app.setMode('surface')">◈ Surface</button>
+    </div>
+    <div class="hr"></div>
+
+    <div class="sec">[ カラー ]</div>
+    <div class="g3">
+      <button class="btn sm active" id="cs-bio" onclick="app.setCS('bio')">単色</button>
+      <button class="btn sm" id="cs-chain" onclick="app.setCS('chain')">チェーン</button>
+      <button class="btn sm" id="cs-ss" onclick="app.setCS('ss')">二次構造</button>
+      <button class="btn sm" id="cs-rainbow" onclick="app.setCS('rainbow')">虹色</button>
+      <button class="btn sm" id="cs-res" onclick="app.setCS('res')">残基</button>
+      <button class="btn sm" id="cs-bf" onclick="app.setCS('bf')">B因子</button>
+    </div>
+    <div class="hr"></div>
+
+    <div class="sec">[ コントロール ]</div>
+    <div class="g2">
+      <button class="btn sm" onclick="app.resetView()">リセット</button>
+      <button class="btn sm" id="rot-btn" onclick="app.toggleRot()">自動回転</button>
+    </div>
+  </div>
+
+  <div id="right" class="panel">
+    <div class="sec">[ 分子情報 ]</div>
+    <div class="kv"><span class="kv-k">PDB ID</span><span class="kv-v c" id="i-pdb">—</span></div>
+    <div class="kv"><span class="kv-k">原子数</span><span class="kv-v" id="i-atoms">—</span></div>
+    <div class="kv"><span class="kv-k">残基数</span><span class="kv-v" id="i-res">—</span></div>
+    <div class="kv"><span class="kv-k">チェーン</span><span class="kv-v" id="i-chains">—</span></div>
+    <div class="kv"><span class="kv-k">結合数</span><span class="kv-v" id="i-bonds">—</span></div>
+    <div class="kv"><span class="kv-k">二次構造</span><span class="kv-v" id="i-ss">—</span></div>
+    <div class="hr"></div>
+    <div class="sec">[ 選択原子 ]</div>
+    <div id="sel-info" style="color:var(--dim);font-size:11px;padding:8px 0;line-height:1.8">クリック / VRトリガーで選択</div>
+    <div class="hr"></div>
+    <div class="sec">[ 凡例 ]</div>
+    <div style="font-size:10px;line-height:2;color:var(--dim)">
+      <span style="color:#00cc44">■</span> C &nbsp;
+      <span style="color:#fff">■</span> H &nbsp;
+      <span style="color:#0044ff">■</span> N &nbsp;
+      <span style="color:#ff2020">■</span> O &nbsp;
+      <span style="color:#ffcc00">■</span> S
+    </div>
+    <div class="hr"></div>
+    <div class="sec">[ VR ガイド ]</div>
+    <div style="font-size:10px;color:var(--dim);line-height:2">
+      Grip → 分子を掴んで移動<br>
+      両手Grip → 拡縮・回転<br>
+      Trigger → 原子を選択<br>
+      X/A ボタン → モード切替
+    </div>
+  </div>
+
+  <div id="ctrl-help">
+    <div class="ci"><span class="ck">ドラッグ</span>回転</div>
+    <div class="ci"><span class="ck">ホイール</span>ズーム</div>
+    <div class="ci"><span class="ck">右ドラッグ</span>平行移動</div>
+    <div class="ci"><span class="ck">クリック</span>原子選択</div>
+  </div>
+  <div id="vr-wrap"><button id="vr-btn">🥽 VR MODE</button></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ================================================================
+   CONSTANTS — CHNOS default (PyMOL-style, C=green)
+   ================================================================ */
+const BIO = { H:0xffffff,C:0x00cc44,N:0x0044ff,O:0xff2020,S:0xffcc00,P:0xff8800,F:0x22ff22,Cl:0x00bb00,Br:0x882200,I:0x990099,Fe:0xdd6600,Ca:0x888888,Mg:0x00aa33,DEFAULT:0xff69b4 };
+const VDW = { H:.12,C:.17,N:.155,O:.15,S:.18,P:.185,F:.147,Cl:.175,Br:.185,I:.198,DEFAULT:.165 };
+const BRAD= { H:.055,C:.08,N:.077,O:.073,S:.095,P:.095,DEFAULT:.085 };
+const CHAIN_C=[0x00e5c8,0xff7b2c,0x9b59ff,0xff2d55,0x00bfff,0xffd700,0x39ff14,0xff69b4,0x00ff88,0xff4500];
+const AA_C={ALA:0x7cb82c,ARG:0x00b4d8,ASN:0xf4a261,ASP:0xe63946,CYS:0xffd166,GLN:0xf4a261,GLU:0xe63946,GLY:0x888888,HIS:0x00b4d8,ILE:0x7cb82c,LEU:0x7cb82c,LYS:0x00b4d8,MET:0xffd166,PHE:0x4361ee,PRO:0x9b59ff,SER:0xf4a261,THR:0xf4a261,TRP:0x4361ee,TYR:0x4361ee,VAL:0x7cb82c,DEFAULT:0x777777};
+const HELIX_C=0xff6644, SHEET_C=0xffdd44, COIL_C=0x88aacc;
+
+/* ================================================================
+   RESIDUE DOUBLE-BOND TOPOLOGY TABLE
+   Reference: PyMOL open-source / modules/chempy/bonds.py
+   ================================================================ */
+const RES_DBL = {
+  // ── Acidic side chains & amides ───────────────────────────────────
+  ASP:[['CG','OD1']],          GLU:[['CD','OE1']],
+  ASN:[['CG','OD1']],          GLN:[['CD','OE1']],
+  // ── Guanidinium (Arg) ────────────────────────────────────────────
+  ARG:[['CZ','NH1']],
+  // ── Aromatic rings — Kekulé alternating representation ───────────
+  PHE:[['CG','CD1'],['CE1','CZ'],['CE2','CD2']],
+  TYR:[['CG','CD1'],['CE1','CZ'],['CE2','CD2']],
+  TRP:[['CG','CD1'],['CE2','CZ2'],['CH2','CZ3'],['CE3','CD2']],
+  HIS:[['ND1','CE1'],['NE2','CD2']],
+  // ── Nucleotide bases (DNA/RNA) ────────────────────────────────────
+  ADE:[['N1','C6'],['C2','N3'],['C4','C5'],['C8','N9']],
+  GUA:[['C2','N3'],['C4','C5'],['C6','O6'],['C8','N9']],
+  CYT:[['N3','C4'],['C5','C6'],['C2','O2']],
+  THY:[['C2','O2'],['C4','O4'],['C5','C6']],
+  URA:[['C2','O2'],['C4','O4'],['C5','C6']],
+};
+
+/* ================================================================
+   PDB PARSER
+   ================================================================ */
+function parsePDB(txt){
+  const atoms=[];
+  for(const line of txt.split('\n')){
+    const rec=line.substring(0,6).trim();
+    if(rec!=='ATOM'&&rec!=='HETATM') continue;
+    const alt=line.substring(16,17).trim();
+    if(alt&&alt!=='A'&&alt!=='1') continue;
+    const x=parseFloat(line.substring(30,38));
+    const y=parseFloat(line.substring(38,46));
+    const z=parseFloat(line.substring(46,54));
+    if(isNaN(x)||isNaN(y)||isNaN(z)) continue;
+    let el=line.substring(76,78).trim();
+    if(!el){const nm=line.substring(12,16).trim();el=nm.replace(/\d/g,'')[0]||'C';}
+    el=el[0].toUpperCase()+(el[1]||'').toLowerCase();
+    atoms.push({
+      serial:parseInt(line.substring(6,11))||0,
+      name:line.substring(12,16).trim(),
+      resName:line.substring(17,20).trim(),
+      chainID:line.substring(21,22).trim()||'A',
+      resSeq:parseInt(line.substring(22,26))||0,
+      x:x/10,y:y/10,z:z/10, el,
+      bF:parseFloat(line.substring(60,66))||0,
+      record:rec
+    });
+  }
+  return atoms;
+}
+
+/* ================================================================
+   SECONDARY STRUCTURE PARSER
+   ================================================================ */
+function parseSS(txt){
+  const helix=[],sheet=[];
+  for(const line of txt.split('\n')){
+    if(line.startsWith('HELIX')){
+      helix.push({
+        cid:line.substring(19,20).trim(),
+        start:parseInt(line.substring(21,25)),
+        end:parseInt(line.substring(33,37))
+      });
+    } else if(line.startsWith('SHEET')){
+      sheet.push({
+        cid:line.substring(21,22).trim(),
+        start:parseInt(line.substring(22,26)),
+        end:parseInt(line.substring(33,37))
+      });
+    }
+  }
+  return {helix,sheet};
+}
+
+/* ================================================================
+   SPATIAL HASH BOND DETECTION
+   ================================================================ */
+function detectBonds(atoms,maxD=0.195){
+  const bonds=[],cs=maxD,grid=new Map();
+  const key=(xi,yi,zi)=>`${xi}|${yi}|${zi}`;
+  for(let i=0;i<atoms.length;i++){
+    const a=atoms[i];if(a.el==='H')continue;
+    const xi=Math.floor(a.x/cs),yi=Math.floor(a.y/cs),zi=Math.floor(a.z/cs);
+    const k=key(xi,yi,zi);if(!grid.has(k))grid.set(k,[]);grid.get(k).push(i);
+  }
+  for(let i=0;i<atoms.length;i++){
+    const a=atoms[i];if(a.el==='H')continue;
+    const xi=Math.floor(a.x/cs),yi=Math.floor(a.y/cs),zi=Math.floor(a.z/cs);
+    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){
+      const nb=grid.get(key(xi+dx,yi+dy,zi+dz));if(!nb)continue;
+      for(const j of nb){
+        if(j<=i)continue;
+        const b=atoms[j];
+        if((a.x-b.x)**2+(a.y-b.y)**2+(a.z-b.z)**2<maxD*maxD)bonds.push([i,j]);
+      }
+    }
+  }
+  return bonds;
+}
+
+/* ================================================================
+   VR BUTTON
+   ================================================================ */
+function initVRButton(ren){
+  const btn=document.getElementById('vr-btn');
+  if(!('xr' in navigator)){btn.textContent='WebXR非対応';btn.style.borderColor='#ff7b2c';return;}
+  navigator.xr.isSessionSupported('immersive-vr').then(ok=>{
+    if(!ok){btn.textContent='VR非対応';btn.style.borderColor='#ff7b2c';return;}
+    let sess=null;
+    btn.onclick=()=>{
+      if(!sess){
+        navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor','bounded-floor','hand-tracking','layers']})
+          .then(s=>{
+            sess=s;s.addEventListener('end',()=>{sess=null;btn.textContent='🥽 VR MODE';});
+            ren.xr.setSession(s);btn.textContent='🥽 EXIT VR';
+          }).catch(e=>{btn.textContent='⚠ エラー';});
+      }else{sess.end();}
+    };
+  }).catch(()=>{btn.textContent='WebXR利用不可';});
+}
+
+/* ================================================================
+   PARALLEL TRANSPORT FRAME — from curve
+   ================================================================ */
+function buildFrame(curve,numSamples){
+  const pts=curve.getPoints(numSamples);
+  const tangents=pts.map((_,i)=>curve.getTangentAt(Math.min(i/numSamples,0.9999)).normalize());
+  let n0=new THREE.Vector3(0,1,0);
+  if(Math.abs(tangents[0].y)>.95)n0.set(1,0,0);
+  n0.sub(tangents[0].clone().multiplyScalar(n0.dot(tangents[0]))).normalize();
+  const normals=[n0.clone()],binormals=[tangents[0].clone().cross(n0).normalize()];
+  for(let i=1;i<tangents.length;i++){
+    const n=normals[i-1].clone();
+    n.sub(tangents[i].clone().multiplyScalar(n.dot(tangents[i]))).normalize();
+    if(n.lengthSq()<.001)n.copy(normals[i-1]);
+    normals.push(n);
+    binormals.push(tangents[i].clone().cross(n).normalize());
+  }
+  return{pts,tangents,normals,binormals};
+}
+
+/* Parallel transport frame — from pre-sampled pts+tangents */
+function buildFrameFromPts(pts,tangents){
+  let n0=new THREE.Vector3(0,1,0);
+  if(Math.abs(tangents[0].y)>.95)n0.set(1,0,0);
+  n0.sub(tangents[0].clone().multiplyScalar(n0.dot(tangents[0]))).normalize();
+  const normals=[n0.clone()],binormals=[tangents[0].clone().cross(n0).normalize()];
+  for(let i=1;i<tangents.length;i++){
+    const n=normals[i-1].clone();
+    n.sub(tangents[i].clone().multiplyScalar(n.dot(tangents[i]))).normalize();
+    if(n.lengthSq()<.001)n.copy(normals[i-1]);
+    normals.push(n);
+    binormals.push(tangents[i].clone().cross(n).normalize());
+  }
+  return{pts,normals,binormals};
+}
+
+/* ================================================================
+   MAIN APP
+   ================================================================ */
+class BioLabXR{
+  constructor(){
+    this.atoms=[];this.pdbId='';this.pdbTxt='';
+    this.ss={helix:[],sheet:[]};
+    this.mode='lines';this.cs='bio';
+    this.autoRot=false;this.selIdx=-1;
+    this.molGroup=null;this.atomMesh=null;
+    this.theta=0;this.phi=1.1;this.radius=5;
+    this.target=new THREE.Vector3();
+    this.dragging=false;this.rmb=false;this.pm={x:0,y:0};
+    this.grip=[false,false];
+    this.gp=[new THREE.Vector3(),new THREE.Vector3()];
+    this.gprev=[new THREE.Vector3(),new THREE.Vector3()];
+    this.gDist=0;this.fpsF=0;this.fpsT=performance.now();
+    this._modeList=['lines','ribbon','spheres','sticks','cartoon','surface'];
+    this._modeIdx=0;this._modeBtn=false;
+    this.init();
+  }
+
+  init(){
+    this.scene=new THREE.Scene();
+    this.scene.background=new THREE.Color(0x020b16);
+    this.scene.fog=new THREE.FogExp2(0x020b16,.04);
+    this.cam=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,.005,200);
+    this.cam.position.set(0,0,5);
+
+    this.ren=new THREE.WebGLRenderer({canvas:document.getElementById('c'),antialias:true});
+    this.ren.setSize(innerWidth,innerHeight);
+    this.ren.setPixelRatio(Math.min(devicePixelRatio,2));
+    this.ren.xr.enabled=true;
+    this.ren.outputEncoding=THREE.sRGBEncoding;
+    this.ren.toneMapping=THREE.ACESFilmicToneMapping;
+    this.ren.toneMappingExposure=1.1;
+
+    this.scene.add(new THREE.AmbientLight(0x1a3355,.8));
+    const d1=new THREE.DirectionalLight(0xffffff,1.0);d1.position.set(5,8,5);this.scene.add(d1);
+    const d2=new THREE.DirectionalLight(0x4488ff,.5);d2.position.set(-6,-4,-6);this.scene.add(d2);
+    const d3=new THREE.DirectionalLight(0xff8844,.3);d3.position.set(0,-3,5);this.scene.add(d3);
+
+    const grid=new THREE.GridHelper(30,60,0x0d2840,0x071622);
+    grid.position.y=-2.5;this.scene.add(grid);
+
+    this.molGroup=new THREE.Group();this.scene.add(this.molGroup);
+    this.ray=new THREE.Raycaster();this.mouse=new THREE.Vector2();
+
+    this.setupVR();this.setupEvents();
+    initVRButton(this.ren);
+    this.ren.setAnimationLoop(()=>this.animate());
+    this.preset('1CRN');
+
+    window.addEventListener('resize',()=>{
+      this.cam.aspect=innerWidth/innerHeight;
+      this.cam.updateProjectionMatrix();
+      this.ren.setSize(innerWidth,innerHeight);
+    });
+  }
+
+  setupVR(){
+    const ren=this.ren;
+    this.ctrl=[ren.xr.getController(0),ren.xr.getController(1)];
+    this.ctrl.forEach((c,i)=>{
+      c.addEventListener('squeezestart',()=>this.onGrip(i,true));
+      c.addEventListener('squeezeend',()=>this.onGrip(i,false));
+      c.addEventListener('selectstart',()=>this.onTrigger(i));
+      this.scene.add(c);
+    });
+    const lGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,-.25)]);
+    const cols=[0x00e5c8,0x9b59ff];
+    this.ctrl.forEach((c,i)=>{
+      c.add(new THREE.Line(lGeo,new THREE.LineBasicMaterial({color:cols[i]})));
+      c.add(new THREE.Mesh(new THREE.SphereGeometry(.018,8,8),new THREE.MeshPhongMaterial({color:cols[i],emissive:cols[i],emissiveIntensity:.5})));
+    });
+    // VR info panel
+    this.vrCanvas=document.createElement('canvas');this.vrCanvas.width=512;this.vrCanvas.height=320;
+    this.vrCtx=this.vrCanvas.getContext('2d');this.vrTex=new THREE.CanvasTexture(this.vrCanvas);
+    const pm=new THREE.Mesh(new THREE.PlaneGeometry(.55,.34),new THREE.MeshBasicMaterial({map:this.vrTex,transparent:true,side:THREE.DoubleSide}));
+    pm.position.set(.9,1.45,-1.4);pm.visible=false;this.vrPanel=pm;this.scene.add(pm);
+    this.drawVRPanel('原子を選択\nTriggerで選択');
+    this.playerRig=new THREE.Group();this.playerRig.position.set(0,0,2.5);
+    this.playerRig.add(this.ctrl[0],this.ctrl[1]);this.scene.add(this.playerRig);
+  }
+
+  drawVRPanel(txt){
+    const ctx=this.vrCtx,W=512,H=320;
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='rgba(2,11,22,.96)';ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle='#00e5c8';ctx.lineWidth=2;ctx.strokeRect(2,2,W-4,H-4);
+    const cd=22;ctx.strokeStyle='#9b59ff';ctx.lineWidth=3;
+    [[0,0,1,1],[W,0,-1,1],[0,H,1,-1],[W,H,-1,-1]].forEach(([px,py,sx,sy])=>{
+      ctx.beginPath();ctx.moveTo(px+sx*cd,py);ctx.lineTo(px,py);ctx.lineTo(px,py+sy*cd);ctx.stroke();
+    });
+    ctx.fillStyle='#00e5c8';ctx.font='bold 17px monospace';ctx.fillText('▶ ATOM INFO',18,34);
+    ctx.fillStyle='#b8d4ea';ctx.font='14px monospace';
+    txt.split('\n').forEach((l,i)=>ctx.fillText(l,18,68+i*26));
+    this.vrTex.needsUpdate=true;
+  }
+
+  onGrip(idx,on){
+    this.grip[idx]=on;
+    if(on)this.gprev[idx].setFromMatrixPosition(this.ctrl[idx].matrixWorld);
+    if(this.grip[0]&&this.grip[1]){
+      const p0=new THREE.Vector3().setFromMatrixPosition(this.ctrl[0].matrixWorld);
+      const p1=new THREE.Vector3().setFromMatrixPosition(this.ctrl[1].matrixWorld);
+      this.gDist=p0.distanceTo(p1);
+    }
+  }
+
+  onTrigger(idx){
+    const ctrl=this.ctrl[idx];
+    const tm=new THREE.Matrix4().identity().extractRotation(ctrl.matrixWorld);
+    this.ray.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
+    this.ray.ray.direction.set(0,0,-1).applyMatrix4(tm);
+    if(!this.atomMesh)return;
+    const hits=this.ray.intersectObject(this.atomMesh);
+    if(hits.length>0){
+      this.selectAtom(hits[0].instanceId);
+      this.vrPanel.visible=true;
+      const cp=new THREE.Vector3().setFromMatrixPosition(ctrl.matrixWorld);
+      this.vrPanel.position.copy(cp).add(new THREE.Vector3(.3,.15,-.5));
+    }
+  }
+
+  setupEvents(){
+    const c=document.getElementById('c');
+    c.addEventListener('mousedown',e=>{
+      if(e.target.closest('#ui'))return;
+      this.dragging=false;this.wasDrag=false;this.rmb=e.button===2;this.pm={x:e.clientX,y:e.clientY};
+      this._mouseDown=true;
+    });
+    window.addEventListener('mouseup',()=>{this._mouseDown=false;});
+    window.addEventListener('mousemove',e=>{
+      if(!this._mouseDown)return;
+      const dx=e.clientX-this.pm.x,dy=e.clientY-this.pm.y;
+      if(Math.abs(dx)+Math.abs(dy)>3)this.wasDrag=true;
+      if(!this.rmb){this.theta-=dx*.007;this.phi-=dy*.007;this.phi=Math.max(.05,Math.min(Math.PI-.05,this.phi));}
+      else{const r=new THREE.Vector3().crossVectors(this.cam.getWorldDirection(new THREE.Vector3()),new THREE.Vector3(0,1,0));this.target.addScaledVector(r,-dx*.001);this.target.y+=dy*.001;}
+      this.pm={x:e.clientX,y:e.clientY};
+      this.updateOrbit();
+    });
+    c.addEventListener('wheel',e=>{e.preventDefault();this.radius*=1+e.deltaY*.0008;this.radius=Math.max(.3,Math.min(60,this.radius));this.updateOrbit();},{passive:false});
+    c.addEventListener('click',e=>{
+      if(this.wasDrag)return;
+      const rect=c.getBoundingClientRect();
+      this.mouse.x=((e.clientX-rect.left)/rect.width)*2-1;
+      this.mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
+      this.pickAtom();
+    });
+    c.addEventListener('contextmenu',e=>e.preventDefault());
+    c.addEventListener('touchstart',e=>{this._mouseDown=true;this.wasDrag=false;this.rmb=false;this.pm={x:e.touches[0].clientX,y:e.touches[0].clientY};},{passive:true});
+    c.addEventListener('touchend',()=>this._mouseDown=false);
+    c.addEventListener('touchmove',e=>{
+      if(!this._mouseDown)return;this.wasDrag=true;
+      const dx=e.touches[0].clientX-this.pm.x,dy=e.touches[0].clientY-this.pm.y;
+      this.theta-=dx*.007;this.phi-=dy*.007;this.phi=Math.max(.05,Math.min(Math.PI-.05,this.phi));
+      this.pm={x:e.touches[0].clientX,y:e.touches[0].clientY};this.updateOrbit();
+    },{passive:true});
+  }
+
+  updateOrbit(){
+    const sp=Math.sin(this.phi),cp=Math.cos(this.phi),st=Math.sin(this.theta),ct=Math.cos(this.theta);
+    this.cam.position.set(this.target.x+this.radius*sp*st,this.target.y+this.radius*cp,this.target.z+this.radius*sp*ct);
+    this.cam.lookAt(this.target);
+  }
+
+  pickAtom(){
+    if(!this.atomMesh)return;
+    this.ray.setFromCamera(this.mouse,this.cam);
+    const hits=this.ray.intersectObject(this.atomMesh);
+    if(hits.length>0)this.selectAtom(hits[0].instanceId);
+    else this.deselect();
+  }
+
+  selectAtom(idx){
+    const sa=this._showAtoms||this.atoms;
+    if(idx==null||idx<0||idx>=sa.length)return;
+    this.selIdx=idx;const a=sa[idx];
+    document.getElementById('sel-info').innerHTML=`
+      <div class="kv"><span class="kv-k">元素</span><span class="kv-v c">${a.el}</span></div>
+      <div class="kv"><span class="kv-k">原子名</span><span class="kv-v">${a.name}</span></div>
+      <div class="kv"><span class="kv-k">残基</span><span class="kv-v">${a.resName} ${a.resSeq}</span></div>
+      <div class="kv"><span class="kv-k">チェーン</span><span class="kv-v">${a.chainID}</span></div>
+      <div class="kv"><span class="kv-k">X,Y,Z (Å)</span><span class="kv-v" style="font-size:10px">${(a.x*10).toFixed(2)},${(a.y*10).toFixed(2)},${(a.z*10).toFixed(2)}</span></div>
+      <div class="kv"><span class="kv-k">B因子</span><span class="kv-v p">${a.bF.toFixed(2)}</span></div>`;
+    this.drawVRPanel(`元素: ${a.el}\n原子名: ${a.name}\n残基: ${a.resName} ${a.resSeq}\nチェーン: ${a.chainID}\nX: ${(a.x*10).toFixed(2)} Å\nY: ${(a.y*10).toFixed(2)} Å\nZ: ${(a.z*10).toFixed(2)} Å\nB因子: ${a.bF.toFixed(2)}`);
+    const dummy=new THREE.Object3D(),mat=new THREE.Matrix4();
+    if(this.atomMesh&&this.atomMesh.isInstancedMesh){
+      this.atomMesh.getMatrixAt(idx,mat);
+      mat.decompose(dummy.position,dummy.quaternion,dummy.scale);
+      dummy.scale.multiplyScalar(1.55);dummy.updateMatrix();
+      this.atomMesh.setMatrixAt(idx,dummy.matrix);
+      this.atomMesh.instanceMatrix.needsUpdate=true;
+    }
+  }
+
+  deselect(){
+    this.selIdx=-1;
+    document.getElementById('sel-info').innerHTML='<span style="color:var(--dim);font-size:11px">クリック / VRトリガーで選択</span>';
+    if(this.atoms.length)this.buildMol(this.atoms);
+  }
+
+  async preset(id){document.getElementById('pdb-in').value=id;await this.fetch(id);}
+  async loadPDB(){
+    const id=document.getElementById('pdb-in').value.trim().toUpperCase();
+    if(!id||id.length!==4){alert('4文字のPDB ID (例: 1CRN)');return;}
+    await this.fetch(id);
+  }
+
+  setLoad(show,txt='読み込み中...'){
+    const el=document.getElementById('loading');el.style.display=show?'flex':'none';
+    if(show)document.getElementById('load-txt').textContent=txt;
+  }
+  setStatus(txt){document.getElementById('status').textContent=txt;}
+
+  async fetch(id){
+    this.setLoad(true,`FETCHING ${id}...`);this.setStatus('CONNECTING RCSB...');
+    try{
+      const r=await window.fetch(`https://files.rcsb.org/download/${id}.pdb`);
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      const txt=await r.text();
+      this.setLoad(true,`PARSING ${id}...`);
+      const atoms=parsePDB(txt);
+      if(!atoms.length)throw new Error('原子データなし');
+      this.pdbId=id;this.atoms=atoms;this.pdbTxt=txt;
+      this.ss=parseSS(txt);
+      const hCount=this.ss.helix.length,sCount=this.ss.sheet.length;
+      document.getElementById('i-ss').textContent=`H:${hCount} E:${sCount}`;
+      this.setLoad(true,`BUILDING ${atoms.length} ATOMS...`);
+      await new Promise(rv=>setTimeout(rv,20));
+      this.buildMol(atoms);this.updateInfo(atoms);
+      this.setLoad(false);this.setStatus(`LOADED: ${id} (${atoms.length} atoms)`);
+    }catch(e){this.setLoad(false);this.setStatus(`ERROR: ${e.message}`);alert(`読み込み失敗:\n${e.message}`);}
+  }
+
+  getColor(a){
+    switch(this.cs){
+      case 'chain':{const chains=[...new Set(this.atoms.map(x=>x.chainID))];return CHAIN_C[chains.indexOf(a.chainID)%CHAIN_C.length];}
+      case 'res':return AA_C[a.resName]||AA_C.DEFAULT;
+      case 'bf':{const maxB=Math.max(...this.atoms.map(x=>x.bF))||1;const t=a.bF/maxB;const c=new THREE.Color();c.setHSL(.67-t*.67,1,.5);return c.getHex();}
+      // ss / rainbow fall back to chain-based for atom rendering (cartoon uses its own colorFn)
+      case 'ss':
+      case 'rainbow':{const chains=[...new Set(this.atoms.map(x=>x.chainID))];return CHAIN_C[chains.indexOf(a.chainID)%CHAIN_C.length];}
+      default:return BIO[a.el]||BIO.DEFAULT;
+    }
+  }
+
+  /* ── Clear molecule group ── */
+  clearMol(){
+    while(this.molGroup.children.length){
+      const ch=this.molGroup.children[0];
+      ch.geometry?.dispose();
+      if(Array.isArray(ch.material))ch.material.forEach(m=>m.dispose());else ch.material?.dispose();
+      this.molGroup.remove(ch);
+    }
+    this.atomMesh=null;this._showAtoms=null;
+  }
+
+  /* ── Compute center + scale, then dispatch ── */
+  buildMol(atoms){
+    this.clearMol();
+    if(!atoms.length)return;
+
+    let cx=0,cy=0,cz=0;
+    atoms.forEach(a=>{cx+=a.x;cy+=a.y;cz+=a.z;});
+    cx/=atoms.length;cy/=atoms.length;cz/=atoms.length;
+    let maxD=0;
+    atoms.forEach(a=>{const d=Math.sqrt((a.x-cx)**2+(a.y-cy)**2+(a.z-cz)**2);if(d>maxD)maxD=d;});
+    const sc=Math.min(2.0/(maxD||1),6);
+    this.target.set(cx*sc,cy*sc,cz*sc);
+    this.radius=2.8+sc*.5;this.updateOrbit();
+
+    switch(this.mode){
+      case 'lines':   this.buildLines  (atoms,cx,cy,cz,sc);break;
+      case 'ribbon':  this.buildRibbon (atoms,cx,cy,cz,sc);break;
+      case 'spheres': this.buildSpheres(atoms,cx,cy,cz,sc);break;
+      case 'sticks':  this.buildSticks (atoms,cx,cy,cz,sc);break;
+      case 'cartoon': this.buildCartoon(atoms,cx,cy,cz,sc);break;
+      case 'surface': this.buildSurface(atoms,cx,cy,cz,sc);break;
+    }
+  }
+
+  /* ================================================================
+     MODE: LINES — half-bond colored line segments
+     ================================================================ */
+  buildLines(atoms,cx,cy,cz,sc){
+    const show=atoms.length>3000?atoms.filter(a=>a.el!=='H'):atoms;
+    this._showAtoms=show;
+    const bonds=detectBonds(show,.195);
+    document.getElementById('i-bonds').textContent=bonds.length.toLocaleString();
+    if(!bonds.length)return;
+    const pos=[],cols=[];
+    for(const[i,j]of bonds){
+      const a=show[i],b=show[j];
+      const pa=[(a.x-cx)*sc,(a.y-cy)*sc,(a.z-cz)*sc];
+      const pb=[(b.x-cx)*sc,(b.y-cy)*sc,(b.z-cz)*sc];
+      const mid=[(pa[0]+pb[0])*.5,(pa[1]+pb[1])*.5,(pa[2]+pb[2])*.5];
+      const ca=new THREE.Color(this.getColor(a)),cb=new THREE.Color(this.getColor(b));
+      pos.push(...pa,...mid,...mid,...pb);
+      cols.push(ca.r,ca.g,ca.b,ca.r,ca.g,ca.b,cb.r,cb.g,cb.b,cb.r,cb.g,cb.b);
+    }
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+    geo.setAttribute('color',new THREE.Float32BufferAttribute(cols,3));
+    const mesh=new THREE.LineSegments(geo,new THREE.LineBasicMaterial({vertexColors:true}));
+    this.molGroup.add(mesh);
+  }
+
+  /* ================================================================
+     MODE: RIBBON — smooth CatmullRom tube through Cα
+     ================================================================ */
+  buildRibbon(atoms,cx,cy,cz,sc){
+    document.getElementById('i-bonds').textContent='—';
+    const chains={};
+    atoms.filter(a=>a.name==='CA').forEach(a=>(chains[a.chainID]=chains[a.chainID]||[]).push(a));
+    Object.entries(chains).forEach(([,ca],ci)=>{
+      ca.sort((a,b)=>a.resSeq-b.resSeq);
+      // Split on chain breaks
+      const segments=[];let seg=[ca[0]];
+      for(let i=1;i<ca.length;i++){
+        if(Math.abs(ca[i].resSeq-ca[i-1].resSeq)>5){segments.push(seg);seg=[];}
+        seg.push(ca[i]);
+      }
+      segments.push(seg);
+      segments.forEach(s=>{
+        if(s.length<2)return;
+        const pts=s.map(a=>new THREE.Vector3((a.x-cx)*sc,(a.y-cy)*sc,(a.z-cz)*sc));
+        const curve=new THREE.CatmullRomCurve3(pts);
+        const N=Math.max(pts.length*4,40);
+        const tube=new THREE.TubeGeometry(curve,N,.025*sc*1.5,7,false);
+        this.molGroup.add(new THREE.Mesh(tube,new THREE.MeshPhongMaterial({color:CHAIN_C[ci%CHAIN_C.length],shininess:60})));
+      });
+    });
+  }
+
+  /* ================================================================
+     MODE: SPHERES — CPK van der Waals spheres
+     ================================================================ */
+  buildSpheres(atoms,cx,cy,cz,sc){
+    const noH=atoms.filter(a=>a.el!=='H');
+    this._showAtoms=noH;
+    const N=noH.length;
+    const geo=new THREE.SphereGeometry(1,20,15);
+    const mat=new THREE.MeshPhongMaterial({shininess:100,specular:new THREE.Color(0x555555)});
+    const mesh=new THREE.InstancedMesh(geo,mat,N);
+    const dummy=new THREE.Object3D(),col=new THREE.Color();
+    for(let i=0;i<N;i++){
+      const a=noH[i];
+      dummy.position.set((a.x-cx)*sc,(a.y-cy)*sc,(a.z-cz)*sc);
+      dummy.scale.setScalar(Math.max(.02,(VDW[a.el]||VDW.DEFAULT)*sc*2));
+      dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
+      col.setHex(this.getColor(a));mesh.setColorAt(i,col);
+    }
+    mesh.instanceMatrix.needsUpdate=true;
+    if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
+    this.molGroup.add(mesh);this.atomMesh=mesh;
+    document.getElementById('i-bonds').textContent='—';
+  }
+
+  /* ================================================================
+     MODE: STICKS — PyMOL-accurate  (Reference: RepStick.cpp)
+     ─────────────────────────────────────────────────────────────
+     • Backbone C=O double bonds on every residue
+     • Side-chain doubles: ASP/GLU/ASN/GLN carboxyl, ARG guanidinium
+     • Aromatic rings: PHE/TYR/TRP/HIS Kekulé alternating bonds
+     • DNA/RNA base double bonds
+     • HETATM ligands: distance-heuristic C=O/C=C/C=N detection
+     • Double bonds drawn as TWO parallel cylinders with offset
+       determined from local molecular geometry (bond-plane neighbor)
+     • Atom sphere caps at every junction (stick_ball_ratio = 1.0)
+     ================================================================ */
+  buildSticks(atoms,cx,cy,cz,sc){
+    const noH=atoms.filter(a=>a.el!=='H');
+    if(!noH.length)return;
+    this._showAtoms=noH;
+
+    // 3D positions in display space
+    const aPos=noH.map(a=>new THREE.Vector3((a.x-cx)*sc,(a.y-cy)*sc,(a.z-cz)*sc));
+
+    // Distance-based bond detection
+    const rawBonds=detectBonds(noH,.195);
+    if(!rawBonds.length){this.buildLines(atoms,cx,cy,cz,sc);return;}
+    document.getElementById('i-bonds').textContent=rawBonds.length.toLocaleString();
+
+    // Bond orders from topology + distance heuristics
+    const bonds=this._assignBondOrders(noH,rawBonds);
+
+    // Adjacency list for double-bond perpendicular direction
+    const adj=noH.map(()=>[]);
+    rawBonds.forEach(([i,j])=>{adj[i].push(j);adj[j].push(i);});
+
+    // PyMOL defaults — stick_radius=0.25Å (=0.025nm after /10)
+    const SR=.025*sc;    // single bond half-radius
+    const DR=.016*sc;    // double bond half-radius (×0.64)
+    const DO=.028*sc;    // double bond center-offset
+    const up=new THREE.Vector3(0,1,0);
+    const dummy=new THREE.Object3D(),col=new THREE.Color();
+
+    // Pre-count cylinder slots: single=2 halves, double=4 halves
+    let nSlots=0;
+    bonds.forEach(b=>nSlots+=b.order===2?4:2);
+
+    const cylGeo=new THREE.CylinderGeometry(1,1,1,10);
+    const mat=new THREE.MeshPhongMaterial({shininess:85});
+    const mesh=new THREE.InstancedMesh(cylGeo,mat,nSlots);
+    let ci=0;
+
+    // Helper: place one cylinder segment
+    const addCyl=(s,e,clr,r)=>{
+      const d=e.clone().sub(s);const len=d.length();if(len<.0001)return;
+      d.normalize();
+      dummy.position.copy(s).add(e).multiplyScalar(.5);
+      const dt=up.dot(d);
+      if     (dt> .9999)dummy.quaternion.identity();
+      else if(dt<-.9999)dummy.quaternion.setFromAxisAngle(new THREE.Vector3(1,0,0),Math.PI);
+      else              dummy.quaternion.setFromUnitVectors(up,d);
+      dummy.scale.set(r,len,r);dummy.updateMatrix();
+      mesh.setMatrixAt(ci,dummy.matrix);
+      col.setHex(clr);mesh.setColorAt(ci,col);
+      ci++;
+    };
+
+    bonds.forEach(({i,j,order})=>{
+      const pa=aPos[i],pb=aPos[j];
+      const mid=pa.clone().add(pb).multiplyScalar(.5);
+      const cA=this.getColor(noH[i]),cB=this.getColor(noH[j]);
+
+      if(order===2){
+        // ── Find perpendicular from nearest non-collinear neighbor ──
+        const bDir=pb.clone().sub(pa).normalize();
+        let perp=null;
+        for(const nbr of [...adj[i],...adj[j]]){
+          if(nbr===i||nbr===j)continue;
+          const v=aPos[nbr].clone().sub(aPos[i<j?i:j]);
+          const p=v.sub(bDir.clone().multiplyScalar(v.dot(bDir)));
+          if(p.lengthSq()>.0001){perp=p.normalize();break;}
+        }
+        if(!perp){
+          const ax=Math.abs(bDir.x)<.8?new THREE.Vector3(1,0,0):new THREE.Vector3(0,1,0);
+          perp=ax.sub(bDir.clone().multiplyScalar(ax.dot(bDir))).normalize();
+        }
+        // Two parallel half-bond pairs offset by ±perp
+        for(const sg of[1,-1]){
+          const oa=pa.clone().addScaledVector(perp,sg*DO);
+          const om=mid.clone().addScaledVector(perp,sg*DO);
+          const ob=pb.clone().addScaledVector(perp,sg*DO);
+          addCyl(oa,om,cA,DR);
+          addCyl(om,ob,cB,DR);
+        }
+      }else{
+        // Single bond: two half-cylinders colored by each atom
+        addCyl(pa,mid,cA,SR);
+        addCyl(mid,pb,cB,SR);
+      }
+    });
+
+    mesh.count=ci;
+    mesh.instanceMatrix.needsUpdate=true;
+    if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
+    this.molGroup.add(mesh);this.atomMesh=mesh;
+
+    // ── Atom sphere caps (PyMOL: stick_ball_ratio=1.0) ───────────────
+    // Spheres cap the cylinder ends and fill multi-bond junctions cleanly
+    const N=Math.min(noH.length,8000);
+    const sGeo=new THREE.SphereGeometry(1,14,10);
+    const sMat=new THREE.MeshPhongMaterial({shininess:100});
+    const sMesh=new THREE.InstancedMesh(sGeo,sMat,N);
+    for(let k=0;k<N;k++){
+      dummy.position.copy(aPos[k]);dummy.quaternion.identity();
+      dummy.scale.setScalar(SR*1.08);dummy.updateMatrix();
+      sMesh.setMatrixAt(k,dummy.matrix);
+      col.setHex(this.getColor(noH[k]));sMesh.setColorAt(k,col);
+    }
+    sMesh.instanceMatrix.needsUpdate=true;
+    if(sMesh.instanceColor)sMesh.instanceColor.needsUpdate=true;
+    this.molGroup.add(sMesh);
+  }
+
+  /* ────────────────────────────────────────────────────────────────
+     Bond order assignment
+     Priority: backbone C=O → side-chain topology → HETATM distance
+     Reference: PyMOL chempy/bonds.py + RepStick bond-order logic
+     ──────────────────────────────────────────────────────────────── */
+  _assignBondOrders(noH,rawBonds){
+    // Lookup: "chainID_resSeq_name" → atom index
+    const byKey=new Map();
+    noH.forEach((a,i)=>byKey.set(`${a.chainID}_${a.resSeq}_${a.name}`,i));
+
+    // All bonds start as single
+    const oMap=new Map();
+    rawBonds.forEach(([i,j])=>oMap.set(`${Math.min(i,j)}_${Math.max(i,j)}`,1));
+
+    const setDbl=(ch,rs,n1,n2)=>{
+      const i1=byKey.get(`${ch}_${rs}_${n1}`);
+      const i2=byKey.get(`${ch}_${rs}_${n2}`);
+      if(i1===undefined||i2===undefined)return;
+      const k=`${Math.min(i1,i2)}_${Math.max(i1,i2)}`;
+      if(oMap.has(k))oMap.set(k,2);
+    };
+
+    noH.forEach(a=>{
+      const{chainID:ch,resSeq:rs,resName:rn}=a;
+
+      // ── Backbone C=O (universal) ────────────────────────────────
+      if(a.name==='C')setDbl(ch,rs,'C','O');
+
+      // ── Side-chain / base topology ──────────────────────────────
+      (RES_DBL[rn]||[]).forEach(([n1,n2])=>setDbl(ch,rs,n1,n2));
+    });
+
+    // ── HETATM ligands: distance heuristic ──────────────────────────
+    // Bond-length ranges from small-molecule crystallography:
+    //   C=O: 1.19–1.27 Å   C-O: 1.34–1.43 Å  threshold 1.33 Å
+    //   C=C: 1.31–1.37 Å   C-C: 1.50–1.56 Å  threshold 1.42 Å
+    //   C=N: 1.25–1.32 Å   C-N: 1.43–1.50 Å  threshold 1.35 Å
+    //   N=N: 1.20–1.28 Å   N-N: 1.40–1.45 Å  threshold 1.30 Å
+    rawBonds.forEach(([i,j])=>{
+      const a=noH[i],b=noH[j];
+      if(a.record!=='HETATM'&&b.record!=='HETATM')return;
+      const k=`${Math.min(i,j)}_${Math.max(i,j)}`;
+      if(oMap.get(k)!==1)return;
+      const d=Math.sqrt((a.x-b.x)**2+(a.y-b.y)**2+(a.z-b.z)**2); // nm
+      const p=`${a.el}${b.el}`;
+      if((p==='CO'||p==='OC')&&d<.133)oMap.set(k,2);
+      else if(p==='CC'&&d<.142)oMap.set(k,2);
+      else if((p==='CN'||p==='NC')&&d<.135)oMap.set(k,2);
+      else if(p==='NN'&&d<.130)oMap.set(k,2);
+    });
+
+    return rawBonds.map(([i,j])=>({i,j,order:oMap.get(`${Math.min(i,j)}_${Math.max(i,j)}`)||1}));
+  }
+
+  /* ================================================================
+     MODE: CARTOON — PyMOL-accurate implementation
+     Reference: PyMOL open-source / RepCartoon.cpp core algorithm
+
+     Key improvements over naive cartoon:
+     1. Guide normals from C=O (carbonyl oxygen) atom positions
+        → ribbon faces the correct biological direction
+     2. Sign-consistency pass + 5-point smoothing
+        → kills alternating O-position oscillation in β-sheets
+     3. Single shared CatmullRom per sub-chain (no inter-segment breaks)
+     4. Shaft + separate arrowhead geometry → hard shoulder = classic PyMOL look
+     ================================================================ */
+  buildCartoon(atoms,cx,cy,cz,sc){
+    document.getElementById('i-bonds').textContent='—';
+    const ss=this.ss;
+
+    // Index carbonyl O atoms  key = "chainID_resSeq"
+    const oMap={};
+    atoms.filter(a=>a.name==='O').forEach(a=>{
+      oMap[`${a.chainID}_${a.resSeq}`]=new THREE.Vector3(
+        (a.x/10-cx)*sc,(a.y/10-cy)*sc,(a.z/10-cz)*sc
+      );
+    });
+
+    const chains={};
+    atoms.filter(a=>a.name==='CA').forEach(a=>(chains[a.chainID]=chains[a.chainID]||[]).push(a));
+
+    Object.entries(chains).forEach(([cid,ca],ci)=>{
+      ca.sort((a,b)=>a.resSeq-b.resSeq);
+      const chainCol=CHAIN_C[ci%CHAIN_C.length];
+      const classify=rs=>{
+        for(const h of ss.helix)if(h.cid===cid&&rs>=h.start&&rs<=h.end)return 'H';
+        for(const s of ss.sheet)if(s.cid===cid&&rs>=s.start&&rs<=s.end)return 'E';
+        return 'C';
+      };
+      // Split on true chain-break gaps
+      const subchains=[[ca[0]]];
+      for(let i=1;i<ca.length;i++){
+        if(Math.abs(ca[i].resSeq-ca[i-1].resSeq)>4)subchains.push([]);
+        subchains[subchains.length-1].push(ca[i]);
+      }
+      subchains.forEach(subca=>{
+        if(subca.length<2)return;
+        this._buildSubChain(subca,cid,oMap,classify,cx,cy,cz,sc,chainCol);
+      });
+    });
+  }
+
+  /* Per-sub-chain cartoon builder */
+  _buildSubChain(subca,cid,oMap,classify,cx,cy,cz,sc,chainCol){
+    const N_CA=subca.length;
+    const caPts=subca.map(a=>new THREE.Vector3((a.x-cx)*sc,(a.y-cy)*sc,(a.z-cz)*sc));
+
+    // ── 1. Raw C=O guide normals ─────────────────────────────────────
+    //    For each Cα: project (O−Cα) perpendicular to the local tangent
+    const rawN=subca.map((a,i)=>{
+      const oPos=oMap[`${a.chainID}_${a.resSeq}`];
+      if(!oPos)return null;
+      const prev=caPts[Math.max(0,i-1)],next=caPts[Math.min(N_CA-1,i+1)];
+      const tan=next.clone().sub(prev).normalize();
+      const oca=oPos.clone().sub(caPts[i]);
+      const proj=oca.sub(tan.clone().multiplyScalar(oca.dot(tan)));
+      return proj.lengthSq()>.0001?proj.normalize():null;
+    });
+
+    // ── 2. Sign-consistency (prevent adjacent flips) ─────────────────
+    for(let i=1;i<N_CA;i++)
+      if(rawN[i]&&rawN[i-1]&&rawN[i].dot(rawN[i-1])<0)rawN[i].negate();
+
+    // ── 3. 5-point smoothing ─────────────────────────────────────────
+    //    Averages out the alternating O-positions in β-sheets
+    const guideN=rawN.map((_,i)=>{
+      const s=new THREE.Vector3();let c=0;
+      for(let d=-2;d<=2;d++){const j=i+d;if(j>=0&&j<N_CA&&rawN[j]){s.add(rawN[j]);c++;}}
+      return c>0?s.normalize():null;
+    });
+
+    // ── 4. Fill gaps via interpolation ──────────────────────────────
+    let first=guideN.findIndex(n=>n!==null);
+    if(first<0){guideN.fill(new THREE.Vector3(0,1,0));first=0;}
+    for(let i=0;i<first;i++)guideN[i]=guideN[first].clone();
+    let last=first;for(let i=first+1;i<N_CA;i++)if(guideN[i])last=i;
+    for(let i=last+1;i<N_CA;i++)guideN[i]=guideN[last].clone();
+    for(let i=0;i<N_CA;i++){
+      if(!guideN[i]){
+        let a=i-1,b=i+1;while(b<N_CA&&!guideN[b])b++;
+        guideN[i]=b<N_CA
+          ?guideN[a].clone().lerp(guideN[b],(i-a)/(b-a)).normalize()
+          :guideN[a].clone();
+      }
+    }
+
+    // ── 5. Single high-res CatmullRom curve ──────────────────────────
+    const SAMP=Math.max(N_CA*10,100);
+    const curve=new THREE.CatmullRomCurve3(caPts);
+    const cPts=curve.getPoints(SAMP);
+    const cTans=cPts.map((_,i)=>curve.getTangentAt(Math.min(i/SAMP,.9999)).normalize());
+
+    // Interpolate O-guided normals → projected ⊥ to tangent at each sample
+    const cNorms=cPts.map((_,si)=>{
+      const fi=si/SAMP*(N_CA-1);
+      const i0=Math.min(Math.floor(fi),N_CA-2),fr=fi-i0;
+      let n=guideN[i0].clone().lerp(guideN[i0+1],fr);
+      const T=cTans[si];
+      n=n.sub(T.clone().multiplyScalar(n.dot(T)));
+      return n.lengthSq()>.0001?n.normalize():guideN[i0].clone();
+    });
+    const cBinorms=cTans.map((t,i)=>t.clone().cross(cNorms[i]).normalize());
+
+    // ── 6. Classify each sample → find segment runs ──────────────────
+    const sTypes=cPts.map((_,si)=>{
+      const ai=Math.min(Math.round(si/SAMP*(N_CA-1)),N_CA-1);
+      return classify(subca[ai].resSeq);
+    });
+    const segs=[];let rs=0,rt=sTypes[0];
+    for(let i=1;i<=SAMP;i++){
+      if(i>SAMP||sTypes[i]!==rt){
+        segs.push({type:rt,s:rs,e:Math.min(i,SAMP)});
+        rs=i;if(i<=SAMP)rt=sTypes[i];
+      }
+    }
+
+    // ── 7. Build colorFn per segment & render from shared frame ─────────
+    //    PyMOL coloring modes:
+    //    bio      → uniform BIO.C green (classic PyMOL single-color cartoon)
+    //    chain    → per-chain color
+    //    ss       → helix=salmon, sheet=gold, coil=slate  (PyMOL "color ss")
+    //    rainbow  → N-term blue → C-term red spectrum      (PyMOL "spectrum")
+    //    res      → hydrophobic/polar/charged residue type
+    //    bf       → B-factor heat map  blue→red
+    const maxBF=subca.reduce((m,a)=>Math.max(m,a.bF),0.001);
+
+    const makeColorFn=(seg)=>{
+      // t : 0→1 along THIS segment
+      // maps to sample index si = seg.s + t*(seg.e-seg.s)
+      // maps to CA atom index ai
+      return t=>{
+        const si=seg.s+Math.round(t*(seg.e-seg.s));
+        const ai=Math.min(Math.round(si/SAMP*(N_CA-1)),N_CA-1);
+        const a=subca[ai];
+        switch(this.cs){
+          case 'ss':
+            return seg.type==='H'?HELIX_C:seg.type==='E'?SHEET_C:COIL_C;
+          case 'chain': return chainCol;
+          case 'bio':   return BIO.C;   // PyMOL default: uniform green
+          case 'rainbow':{
+            const tr=ai/Math.max(N_CA-1,1);
+            const c=new THREE.Color();c.setHSL((1-tr)*0.667,1,.55);return c.getHex();
+          }
+          case 'res': return AA_C[a.resName]||AA_C.DEFAULT;
+          case 'bf':{
+            const tr=a.bF/maxBF;
+            const c=new THREE.Color();c.setHSL(.667-tr*.667,1,.5);return c.getHex();
+          }
+          default: return chainCol;
+        }
+      };
+    };
+
+    segs.forEach(seg=>{
+      const F={
+        pts:      cPts.slice(seg.s,seg.e+1),
+        normals:  cNorms.slice(seg.s,seg.e+1),
+        binormals:cBinorms.slice(seg.s,seg.e+1)
+      };
+      if(F.pts.length<2)return;
+      const cfn=makeColorFn(seg);
+      switch(seg.type){
+        case 'H':this._helixMesh(F,sc,cfn);break;
+        case 'E':this._sheetMesh(F,sc,cfn);break;
+        default: this._coilMesh(F,sc,cfn);break;
+      }
+    });
+  }
+
+  // ── α-Helix: vertex-colored cylinder tube ──────────────────────────────
+  // Circular cross-section, per-vertex color for smooth gradient support
+  _helixMesh(F,sc,colorFn){
+    if(F.pts.length<2)return;
+    const R=.082*sc,SIDES=12,M=F.pts.length;
+    const verts=[],cols=[],idx=[];
+    for(let i=0;i<M;i++){
+      const t=i/(M-1),p=F.pts[i],n=F.normals[i],b=F.binormals[i];
+      const c=new THREE.Color(colorFn(t));
+      for(let k=0;k<SIDES;k++){
+        const a=k/SIDES*Math.PI*2;
+        verts.push(
+          p.x+(n.x*Math.cos(a)+b.x*Math.sin(a))*R,
+          p.y+(n.y*Math.cos(a)+b.y*Math.sin(a))*R,
+          p.z+(n.z*Math.cos(a)+b.z*Math.sin(a))*R
+        );
+        cols.push(c.r,c.g,c.b);
+      }
+      if(i>0){
+        const b0=(i-1)*SIDES,b1=i*SIDES;
+        for(let k=0;k<SIDES;k++){
+          const nk=(k+1)%SIDES;
+          idx.push(b0+k,b1+k,b1+nk, b0+k,b1+nk,b0+nk);
+        }
+      }
+    }
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+    geo.setAttribute('color',new THREE.Float32BufferAttribute(cols,3));
+    geo.setIndex(idx);geo.computeVertexNormals();
+    this.molGroup.add(new THREE.Mesh(geo,new THREE.MeshPhongMaterial({vertexColors:true,shininess:90})));
+  }
+
+  // ── β-Sheet: vertex-colored flat ribbon + PyMOL-style arrowhead ────────
+  // colorFn(t) called with global t=0→1 for smooth gradients across whole strand
+  _sheetMesh(F,sc,colorFn){
+    const{pts,normals:norms,binormals:binorms}=F;
+    const M=pts.length;if(M<2)return;
+    const SW=.12*sc,T=.038*sc,AW=.43*sc;
+
+    const mat=new THREE.MeshPhongMaterial({vertexColors:true,shininess:105,side:THREE.DoubleSide});
+
+    const buildRibbon=(i0,i1,wFn,frontCap,backCap)=>{
+      const verts=[],cols=[],idx=[];
+      for(let i=i0;i<=i1;i++){
+        const globalT=i/(M-1);  // position in FULL segment → consistent color
+        const p=pts[i],n=norms[i],b=binorms[i],hw=wFn(i);
+        const c=new THREE.Color(colorFn(globalT));
+        verts.push(
+          p.x-b.x*hw+n.x*T,p.y-b.y*hw+n.y*T,p.z-b.z*hw+n.z*T,
+          p.x+b.x*hw+n.x*T,p.y+b.y*hw+n.y*T,p.z+b.z*hw+n.z*T,
+          p.x+b.x*hw-n.x*T,p.y+b.y*hw-n.y*T,p.z+b.z*hw-n.z*T,
+          p.x-b.x*hw-n.x*T,p.y-b.y*hw-n.y*T,p.z-b.z*hw-n.z*T
+        );
+        for(let j=0;j<4;j++)cols.push(c.r,c.g,c.b);
+        const s=i-i0;
+        if(s>0){
+          const b0=(s-1)*4,b1=s*4;
+          idx.push(b0,b0+1,b1+1, b0,b1+1,b1);
+          idx.push(b0+3,b1+3,b1+2, b0+3,b1+2,b0+2);
+          idx.push(b0,b1,b1+3, b0,b1+3,b0+3);
+          idx.push(b0+1,b0+2,b1+2, b0+1,b1+2,b1+1);
+        }
+      }
+      if(frontCap)idx.push(0,1,2, 0,2,3);
+      if(backCap){const L=((i1-i0)*4);idx.push(L,L+2,L+1, L,L+3,L+2);}
+      const geo=new THREE.BufferGeometry();
+      geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+      geo.setAttribute('color',new THREE.Float32BufferAttribute(cols,3));
+      geo.setIndex(idx);geo.computeVertexNormals();
+      return geo;
+    };
+
+    const STEP=Math.floor(M*0.76);
+    if(STEP>=2)
+      this.molGroup.add(new THREE.Mesh(buildRibbon(0,STEP,()=>SW,true,false),mat));
+
+    const ALEN=M-STEP,PEAK=STEP+Math.max(1,Math.floor(ALEN*0.16));
+    if(ALEN>=2)
+      this.molGroup.add(new THREE.Mesh(
+        buildRibbon(STEP,M-1,i=>{
+          if(i<=PEAK)return SW+(AW-SW)*(i-STEP)/(PEAK-STEP);
+          return Math.max(.0005*sc,AW*(1-(i-PEAK)/(M-1-PEAK)));
+        },false,true),mat
+      ));
+  }
+
+  // ── Loop/coil: vertex-colored thin tube ────────────────────────────────
+  _coilMesh(F,sc,colorFn){
+    if(F.pts.length<2)return;
+    const R=.028*sc,SIDES=7,M=F.pts.length;
+    const verts=[],cols=[],idx=[];
+    for(let i=0;i<M;i++){
+      const t=i/(M-1),p=F.pts[i],n=F.normals[i],b=F.binormals[i];
+      const c=new THREE.Color(colorFn(t));
+      for(let k=0;k<SIDES;k++){
+        const a=k/SIDES*Math.PI*2;
+        verts.push(
+          p.x+(n.x*Math.cos(a)+b.x*Math.sin(a))*R,
+          p.y+(n.y*Math.cos(a)+b.y*Math.sin(a))*R,
+          p.z+(n.z*Math.cos(a)+b.z*Math.sin(a))*R
+        );
+        cols.push(c.r,c.g,c.b);
+      }
+      if(i>0){
+        const b0=(i-1)*SIDES,b1=i*SIDES;
+        for(let k=0;k<SIDES;k++){
+          const nk=(k+1)%SIDES;
+          idx.push(b0+k,b1+k,b1+nk, b0+k,b1+nk,b0+nk);
+        }
+      }
+    }
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+    geo.setAttribute('color',new THREE.Float32BufferAttribute(cols,3));
+    geo.setIndex(idx);geo.computeVertexNormals();
+    this.molGroup.add(new THREE.Mesh(geo,new THREE.MeshPhongMaterial({vertexColors:true,shininess:30})));
+  }
+
+  /* ================================================================
+     MODE: SURFACE — SAS (Solvent Accessible Surface) approximation
+     ================================================================ */
+  buildSurface(atoms,cx,cy,cz,sc){
+    // Render atoms at (VDW + probe) radius — creates smooth surface appearance
+    // when atoms overlap, visually blending into a continuous surface
+    const noH=atoms.filter(a=>a.el!=='H');
+    const N=Math.min(noH.length,9000);
+    this._showAtoms=noH;
+    const probe=0.14; // water probe radius 1.4 Å
+    const geo=new THREE.SphereGeometry(1,24,18);
+    const mat=new THREE.MeshPhongMaterial({
+      shininess:140,specular:new THREE.Color(0x888888)
+    });
+    const mesh=new THREE.InstancedMesh(geo,mat,N);
+    const dummy=new THREE.Object3D(),col=new THREE.Color();
+    for(let i=0;i<N;i++){
+      const a=noH[i];
+      dummy.position.set((a.x-cx)*sc,(a.y-cy)*sc,(a.z-cz)*sc);
+      dummy.scale.setScalar(Math.max(.03,((VDW[a.el]||VDW.DEFAULT)+probe)*sc*2));
+      dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
+      col.setHex(this.getColor(a));mesh.setColorAt(i,col);
+    }
+    mesh.instanceMatrix.needsUpdate=true;
+    if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
+    this.molGroup.add(mesh);this.atomMesh=mesh;
+    document.getElementById('i-bonds').textContent='—';
+  }
+
+  /* ── Info panel update ── */
+  updateInfo(atoms){
+    document.getElementById('i-pdb').textContent=this.pdbId;
+    document.getElementById('i-atoms').textContent=atoms.length.toLocaleString();
+    const res=new Set(atoms.map(a=>`${a.chainID}|${a.resSeq}`)).size;
+    document.getElementById('i-res').textContent=res.toLocaleString();
+    document.getElementById('i-chains').textContent=new Set(atoms.map(a=>a.chainID)).size;
+    document.getElementById('i-bonds').textContent='—';
+  }
+
+  setMode(m){
+    this.mode=m;
+    this._modeIdx=this._modeList.indexOf(m);
+    ['lines','ribbon','spheres','sticks','cartoon','surface'].forEach(x=>document.getElementById(`m-${x}`)?.classList.remove('active'));
+    document.getElementById(`m-${m}`)?.classList.add('active');
+    if(this.atoms.length)this.buildMol(this.atoms);
+  }
+
+  setCS(s){
+    this.cs=s;
+    ['bio','chain','ss','rainbow','res','bf'].forEach(x=>document.getElementById(`cs-${x}`)?.classList.remove('active'));
+    document.getElementById(`cs-${s}`)?.classList.add('active');
+    if(this.atoms.length)this.buildMol(this.atoms);
+  }
+
+  resetView(){
+    this.theta=0;this.phi=1.1;this.radius=5;
+    this.molGroup.rotation.set(0,0,0);this.molGroup.position.set(0,0,0);this.molGroup.scale.setScalar(1);
+    this.updateOrbit();
+  }
+
+  toggleRot(){
+    this.autoRot=!this.autoRot;
+    document.getElementById('rot-btn').classList.toggle('active',this.autoRot);
+  }
+
+  animate(){
+    this.fpsF++;
+    const now=performance.now();
+    if(now-this.fpsT>1000){document.getElementById('fps').textContent=`${this.fpsF} FPS`;this.fpsF=0;this.fpsT=now;}
+    if(this.autoRot)this.molGroup.rotation.y+=.004;
+
+    if(this.ren.xr.isPresenting){
+      this.ctrl.forEach((c,i)=>this.gp[i].setFromMatrixPosition(c.matrixWorld));
+      if(this.grip[0]&&!this.grip[1]){
+        const delta=this.gp[0].clone().sub(this.gprev[0]);
+        this.molGroup.position.addScaledVector(delta,2.5);
+      }else if(this.grip[0]&&this.grip[1]){
+        const dist=this.gp[0].distanceTo(this.gp[1]);
+        if(this.gDist>0){const sf=dist/this.gDist;const ns=this.molGroup.scale.x*sf;this.molGroup.scale.setScalar(Math.max(.05,Math.min(15,ns)));}
+        this.gDist=dist;
+        const mid=this.gp[0].clone().add(this.gp[1]).multiplyScalar(.5);
+        const pm=this.gprev[0].clone().add(this.gprev[1]).multiplyScalar(.5);
+        const dlt=mid.sub(pm);
+        this.molGroup.rotation.y+=dlt.x*6;this.molGroup.rotation.x+=dlt.y*6;
+      }
+      this.gprev.forEach((p,i)=>p.copy(this.gp[i]));
+      // X/A button cycles modes
+      const gps=navigator.getGamepads?.()??[];
+      for(const gp of gps){
+        if(!gp)continue;
+        const xb=gp.buttons[2]||gp.buttons[4];
+        if(xb?.pressed&&!this._modeBtn){
+          this._modeBtn=true;
+          this._modeIdx=(this._modeIdx+1)%this._modeList.length;
+          this.setMode(this._modeList[this._modeIdx]);
+        }
+        if(!xb?.pressed)this._modeBtn=false;
+      }
+      if(this.vrPanel.visible){
+        const xrCam=this.ren.xr.getCamera(this.cam);
+        const cp=new THREE.Vector3().setFromMatrixPosition(xrCam.matrixWorld);
+        this.vrPanel.lookAt(cp);
+      }
+    }
+    this.ren.render(this.scene,this.cam);
+  }
+}
+
+const app=new BioLabXR();
+</script>
+</body>
+</html>
