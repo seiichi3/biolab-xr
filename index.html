@@ -363,20 +363,17 @@ function marchingTets({field,nx,ny,nz,x0,y0,z0,CS}){
 }
 
 /* ================================================================
-   LAPLACIAN SMOOTHING  (PyMOL: RepSurface.cpp → smooth() 3 passes)
+   LAPLACIAN SMOOTHING  (PyMOL: RepSurface.cpp → smooth() passes)
    ────────────────────────────────────────────────────────────────
-   1. Deduplicate vertices (adjacent tet-cells share exact edges)
-   2. Build vertex adjacency from triangle connectivity
-   3. Apply N iterations of weighted Laplacian (λ=0.5)
-   Result: eliminates faceting from coarse grid without distortion
+   Returns INDEXED mesh {pos, idx} so Three.js computeVertexNormals()
+   can average across shared vertices → smooth shading at atom seams.
+   λ=0.5, iterations scaled to grid coarseness.
    ================================================================ */
 function smoothSurface(V,iters){
-  const N=V.length/3;if(!N)return V;
+  const N=V.length/3;if(!N)return{pos:new Float32Array(0),idx:new Uint32Array(0)};
 
-  // ── 1. Vertex deduplication via integer hash (1e5 precision in nm) ──
-  const vm=new Map();
-  const uid=[];           // unique index → first occurrence in V
-  const v2u=new Int32Array(N);
+  // ── 1. Deduplicate vertices (1e5 nm precision ≈ 0.0001 Å) ──────────────
+  const vm=new Map(),uid=[],v2u=new Uint32Array(N);
   for(let i=0;i<N;i++){
     const k=`${Math.round(V[i*3]*1e5)}|${Math.round(V[i*3+1]*1e5)}|${Math.round(V[i*3+2]*1e5)}`;
     if(!vm.has(k)){vm.set(k,uid.length);uid.push(i);}
@@ -384,11 +381,11 @@ function smoothSurface(V,iters){
   }
   const M=uid.length;
 
-  // ── 2. Canonical positions ───────────────────────────────────────────
+  // ── 2. Canonical positions ──────────────────────────────────────────────
   const p=new Float32Array(M*3);
   for(let i=0;i<M;i++){const o=uid[i];p[i*3]=V[o*3];p[i*3+1]=V[o*3+1];p[i*3+2]=V[o*3+2];}
 
-  // ── 3. Build adjacency from triangle faces ───────────────────────────
+  // ── 3. Vertex adjacency from triangles ──────────────────────────────────
   const adj=Array.from({length:M},()=>[]);
   for(let ti=0;ti<N;ti+=3){
     const a=v2u[ti],b=v2u[ti+1],c=v2u[ti+2];
@@ -396,7 +393,7 @@ function smoothSurface(V,iters){
   }
   for(let i=0;i<M;i++)adj[i]=[...new Set(adj[i])];
 
-  // ── 4. Laplacian iterations (λ=0.5, PyMOL default passes=3) ─────────
+  // ── 4. Laplacian iterations (λ=0.5) ─────────────────────────────────────
   const np=new Float32Array(M*3);
   for(let it=0;it<iters;it++){
     for(let i=0;i<M;i++){
@@ -411,10 +408,8 @@ function smoothSurface(V,iters){
     p.set(np);
   }
 
-  // ── 5. Write smoothed positions back to flat array ───────────────────
-  const R=new Float32Array(V.length);
-  for(let i=0;i<N;i++){const c=v2u[i];R[i*3]=p[c*3];R[i*3+1]=p[c*3+1];R[i*3+2]=p[c*3+2];}
-  return R;
+  // ── 5. Return indexed mesh (v2u = index buffer, p = unique positions) ───
+  return{pos:p,idx:v2u};
 }
 
 /* ================================================================
@@ -1349,12 +1344,11 @@ class BioLabXR{
     const noH=atoms.filter(a=>a.el!=='H');
     this._showAtoms=noH;
 
-    // Adaptive cell size: target ~80 cells/side (PyMOL default ≈ 0.5Å)
-    // Standard 0.70Å, Hi-Q 0.50Å — Laplacian smoothing removes grid faceting
+    // Adaptive cell size — coarser grid needs more smoothing iterations
     const ext=noH.reduce((m,a)=>Math.max(m,
       Math.abs(a.x-cx),Math.abs(a.y-cy),Math.abs(a.z-cz)),0)*2;
-    const baseCS=this._sesHiQ?0.050:0.070;         // nm/cell
-    const CS=Math.max(baseCS,Math.min(0.12,ext/80));
+    const baseCS=this._sesHiQ?0.050:0.070;    // nm/cell (0.50Å / 0.70Å)
+    const CS=Math.max(baseCS,Math.min(0.10,ext/90));
 
     this.setLoad(true,'SES: フィールド計算中...');
     this.setStatus('COMPUTING CONNOLLY SURFACE...');
@@ -1369,24 +1363,26 @@ class BioLabXR{
         const raw0=marchingTets(fd);
         if(!raw0.length){this.setLoad(false);this.setStatus('SES: 面なし');return;}
 
-        // ── Laplacian smoothing (3 passes, λ=0.5 — same as PyMOL) ───
-        this.setLoad(true,`SES: スムージング中 (${Math.round(raw0.length/9).toLocaleString()} 面)...`);
+        // Iterations scaled to coarseness: coarser grid needs more passes
+        const iters=this._sesHiQ?8:Math.round(5+Math.max(0,(CS-0.07)/0.03)*3);
+        this.setLoad(true,`SES: スムージング中 (${iters}回)...`);
         requestAnimationFrame(()=>{
-          const rawV=smoothSurface(raw0,3);
-          const nTri=rawV.length/9;
+          // Returns INDEXED mesh: pos=unique positions, idx=Uint32 index buffer
+          const{pos,idx}=smoothSurface(raw0,iters);
+          const M=pos.length/3;       // unique vertex count (< raw vertex count)
+          const nTri=idx.length/3;
 
           this.setLoad(true,`SES: カラーリング中 (${Math.round(nTri).toLocaleString()} 面)...`);
           requestAnimationFrame(()=>{
 
-            // ── Scale nm → display coords ───────────────────────────
-            const N=rawV.length/3;
-            const sv=new Float32Array(rawV.length);
-            for(let i=0;i<rawV.length;i+=3){
-              sv[i  ]=(rawV[i  ]-cx)*sc;
-              sv[i+1]=(rawV[i+1]-cy)*sc;
-              sv[i+2]=(rawV[i+2]-cz)*sc;}
+            // ── Scale unique positions nm → display coords ────────────
+            const sv=new Float32Array(pos.length);
+            for(let i=0;i<pos.length;i+=3){
+              sv[i  ]=(pos[i  ]-cx)*sc;
+              sv[i+1]=(pos[i+1]-cy)*sc;
+              sv[i+2]=(pos[i+2]-cz)*sc;}
 
-            // ── Spatial hash for O(1) nearest-atom lookup ───────────
+            // ── Spatial hash for O(1) nearest-atom lookup ─────────────
             const ags=0.70*sc;
             const ag=new Map();
             const sa=noH.map((a,i)=>({...a,xs:(a.x-cx)*sc,ys:(a.y-cy)*sc,zs:(a.z-cz)*sc,i}));
@@ -1403,24 +1399,23 @@ class BioLabXR{
                   if(d<md){md=d;bi=i;}}}
               return sa[bi];};
 
-            // ── Per-vertex color + analytical outward normal ─────────
-            const cv=new Float32Array(rawV.length);
-            const nv=new Float32Array(rawV.length);
+            // ── Color per UNIQUE vertex (M lookups, not N flat) ───────
+            const cv=new Float32Array(M*3);
             const col=new THREE.Color();
-            for(let vi=0;vi<N;vi++){
-              const px=sv[vi*3],py=sv[vi*3+1],pz=sv[vi*3+2];
-              const na=nearest(px,py,pz);
+            for(let vi=0;vi<M;vi++){
+              const na=nearest(sv[vi*3],sv[vi*3+1],sv[vi*3+2]);
               col.setHex(this.getColor(na));
-              cv[vi*3]=col.r;cv[vi*3+1]=col.g;cv[vi*3+2]=col.b;
-              const nnx=px-na.xs,nny=py-na.ys,nnz=pz-na.zs;
-              const nl=Math.sqrt(nnx*nnx+nny*nny+nnz*nnz)||1;
-              nv[vi*3]=nnx/nl;nv[vi*3+1]=nny/nl;nv[vi*3+2]=nnz/nl;}
+              cv[vi*3]=col.r;cv[vi*3+1]=col.g;cv[vi*3+2]=col.b;}
 
-            // ── Build Three.js mesh ──────────────────────────────────
+            // ── Indexed geometry — computeVertexNormals() averages normals
+            //    across ALL triangles sharing each vertex → smooth shading,
+            //    no hard edges at atom boundaries (key PyMOL quality trait)
             const geo=new THREE.BufferGeometry();
             geo.setAttribute('position',new THREE.Float32BufferAttribute(sv,3));
             geo.setAttribute('color',   new THREE.Float32BufferAttribute(cv,3));
-            geo.setAttribute('normal',  new THREE.Float32BufferAttribute(nv,3));
+            geo.setIndex(new THREE.BufferAttribute(idx,1));
+            geo.computeVertexNormals();   // topology-aware smooth normals
+
             const mat=new THREE.MeshPhongMaterial({
               vertexColors:true,shininess:90,specular:new THREE.Color(0x444444),
               transparent:true,opacity:this._surfOp??0.82,side:THREE.DoubleSide});
@@ -1430,7 +1425,7 @@ class BioLabXR{
             document.getElementById('i-bonds').textContent=
               `${Math.round(nTri).toLocaleString()} faces`;
             this.setLoad(false);
-            this.setStatus(`SES READY — ${Math.round(nTri).toLocaleString()} tri, CS=${(CS*10).toFixed(1)}Å (smoothed×3)`);
+            this.setStatus(`SES READY — ${Math.round(nTri).toLocaleString()} tri, CS=${(CS*10).toFixed(1)}Å, sm×${iters}`);
           }); // rAF4: coloring
         });   // rAF3: smoothing
       });     // rAF2: marchingTets
