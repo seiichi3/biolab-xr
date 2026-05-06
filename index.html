@@ -150,6 +150,18 @@ input[type=text]:focus{border-color:var(--cyan)}
         <button class="btn sm" id="sq-hi" onclick="app.setSESQuality('hi')">高品質</button>
         <button class="btn sm active" id="sq-med" onclick="app.setSESQuality('med')">標準</button>
       </div>
+
+      <!-- Shown only when semi-transparent is selected -->
+      <div id="overlay-ctrl" style="display:none">
+        <div class="hr"></div>
+        <div class="sec">[ 重ね表示 ]</div>
+        <div class="g2">
+          <button class="btn sm" id="ov-lines"   onclick="app.setOverlay('lines')">Lines</button>
+          <button class="btn sm" id="ov-ribbon"  onclick="app.setOverlay('ribbon')">Ribbon</button>
+          <button class="btn sm" id="ov-sticks"  onclick="app.setOverlay('sticks')">Sticks</button>
+          <button class="btn sm active" id="ov-cartoon" onclick="app.setOverlay('cartoon')">Cartoon</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -514,6 +526,9 @@ class BioLabXR{
     this.gDist=0;this.fpsF=0;this.fpsT=performance.now();
     this._modeList=['lines','ribbon','spheres','sticks','cartoon','surface'];
     this._modeIdx=0;this._modeBtn=false;
+    this.overlayMode='cartoon';   // mode shown inside semi-transparent surface
+    this.overlayGroup=null;       // separate THREE.Group for overlay meshes
+    this._cx=0;this._cy=0;this._cz=0;this._sc=1; // cached centering values
     this.init();
   }
 
@@ -541,6 +556,7 @@ class BioLabXR{
     grid.position.y=-2.5;this.scene.add(grid);
 
     this.molGroup=new THREE.Group();this.scene.add(this.molGroup);
+    this.overlayGroup=new THREE.Group();this.scene.add(this.overlayGroup);
     this.ray=new THREE.Raycaster();this.mouse=new THREE.Vector2();
 
     this.setupVR();this.setupEvents();
@@ -757,6 +773,7 @@ class BioLabXR{
   /* ── Compute center + scale, then dispatch ── */
   buildMol(atoms){
     this.clearMol();
+    this._clearOverlay();   // always clear overlay when rebuilding
     if(!atoms.length)return;
 
     let cx=0,cy=0,cz=0;
@@ -765,6 +782,8 @@ class BioLabXR{
     let maxD=0;
     atoms.forEach(a=>{const d=Math.sqrt((a.x-cx)**2+(a.y-cy)**2+(a.z-cz)**2);if(d>maxD)maxD=d;});
     const sc=Math.min(2.0/(maxD||1),6);
+    // Cache for overlay rebuilds
+    this._cx=cx;this._cy=cy;this._cz=cz;this._sc=sc;
     // Atoms are placed at (a.x-cx)*sc → molecule center is at display origin (0,0,0)
     // Reset radius ONLY when a new molecule is loaded — preserve zoom on mode/color switch
     if(this._lastPdb!==this.pdbId){
@@ -1426,6 +1445,8 @@ class BioLabXR{
               `${Math.round(nTri).toLocaleString()} faces`;
             this.setLoad(false);
             this.setStatus(`SES READY — ${Math.round(nTri).toLocaleString()} tri, CS=${(CS*10).toFixed(1)}Å, sm×${iters}`);
+            // If semi-transparent, build the overlay representation
+            if((this._surfOp??0.82)<=0.5)this._buildOverlay();
           }); // rAF4: coloring
         });   // rAF3: smoothing
       });     // rAF2: marchingTets
@@ -1440,6 +1461,50 @@ class BioLabXR{
     const map={1.0:'sop-hi',0.80:'sop-mid',0.42:'sop-lo'};
     ['sop-hi','sop-mid','sop-lo'].forEach(id=>document.getElementById(id)?.classList.remove('active'));
     if(map[v])document.getElementById(map[v])?.classList.add('active');
+    // Show overlay panel and build/clear overlay
+    const isTransp=v<=0.5;
+    const oc=document.getElementById('overlay-ctrl');
+    if(oc)oc.style.display=isTransp?'block':'none';
+    if(isTransp)this._buildOverlay();else this._clearOverlay();
+  }
+
+  /* Select which mode to overlay inside the transparent surface */
+  setOverlay(mode){
+    this.overlayMode=mode;
+    ['lines','ribbon','sticks','cartoon'].forEach(m=>
+      document.getElementById(`ov-${m}`)?.classList.remove('active'));
+    document.getElementById(`ov-${mode}`)?.classList.add('active');
+    if((this._surfOp??0.82)<=0.5)this._buildOverlay();
+  }
+
+  /* Build the overlay representation inside overlayGroup */
+  _buildOverlay(){
+    this._clearOverlay();
+    if(!this.atoms.length)return;
+    const{atoms,_cx:cx,_cy:cy,_cz:cz,_sc:sc}=this;
+    // Temporarily redirect molGroup → overlayGroup so build methods add there
+    const sg=this.molGroup,sa=this.atomMesh,ss=this._showAtoms;
+    this.molGroup=this.overlayGroup;
+    switch(this.overlayMode){
+      case 'lines':   this.buildLines(atoms,cx,cy,cz,sc);break;
+      case 'ribbon':  this.buildRibbon(atoms,cx,cy,cz,sc);break;
+      case 'sticks':  this.buildSticks(atoms,cx,cy,cz,sc);break;
+      case 'cartoon': this.buildCartoon(atoms,cx,cy,cz,sc);break;
+    }
+    // Restore — keep surface's atomMesh for raycasting
+    this.molGroup=sg;this.atomMesh=sa;this._showAtoms=ss;
+  }
+
+  /* Remove all meshes from overlayGroup */
+  _clearOverlay(){
+    if(!this.overlayGroup)return;
+    while(this.overlayGroup.children.length){
+      const ch=this.overlayGroup.children[0];
+      ch.geometry?.dispose();
+      if(Array.isArray(ch.material))ch.material.forEach(m=>m.dispose());
+      else ch.material?.dispose();
+      this.overlayGroup.remove(ch);
+    }
   }
 
   /* Surface quality: hi=0.65Å cell, med=0.90Å (default) */
