@@ -363,6 +363,61 @@ function marchingTets({field,nx,ny,nz,x0,y0,z0,CS}){
 }
 
 /* ================================================================
+   LAPLACIAN SMOOTHING  (PyMOL: RepSurface.cpp → smooth() 3 passes)
+   ────────────────────────────────────────────────────────────────
+   1. Deduplicate vertices (adjacent tet-cells share exact edges)
+   2. Build vertex adjacency from triangle connectivity
+   3. Apply N iterations of weighted Laplacian (λ=0.5)
+   Result: eliminates faceting from coarse grid without distortion
+   ================================================================ */
+function smoothSurface(V,iters){
+  const N=V.length/3;if(!N)return V;
+
+  // ── 1. Vertex deduplication via integer hash (1e5 precision in nm) ──
+  const vm=new Map();
+  const uid=[];           // unique index → first occurrence in V
+  const v2u=new Int32Array(N);
+  for(let i=0;i<N;i++){
+    const k=`${Math.round(V[i*3]*1e5)}|${Math.round(V[i*3+1]*1e5)}|${Math.round(V[i*3+2]*1e5)}`;
+    if(!vm.has(k)){vm.set(k,uid.length);uid.push(i);}
+    v2u[i]=vm.get(k);
+  }
+  const M=uid.length;
+
+  // ── 2. Canonical positions ───────────────────────────────────────────
+  const p=new Float32Array(M*3);
+  for(let i=0;i<M;i++){const o=uid[i];p[i*3]=V[o*3];p[i*3+1]=V[o*3+1];p[i*3+2]=V[o*3+2];}
+
+  // ── 3. Build adjacency from triangle faces ───────────────────────────
+  const adj=Array.from({length:M},()=>[]);
+  for(let ti=0;ti<N;ti+=3){
+    const a=v2u[ti],b=v2u[ti+1],c=v2u[ti+2];
+    adj[a].push(b,c);adj[b].push(a,c);adj[c].push(a,b);
+  }
+  for(let i=0;i<M;i++)adj[i]=[...new Set(adj[i])];
+
+  // ── 4. Laplacian iterations (λ=0.5, PyMOL default passes=3) ─────────
+  const np=new Float32Array(M*3);
+  for(let it=0;it<iters;it++){
+    for(let i=0;i<M;i++){
+      const nb=adj[i],n=nb.length;
+      if(!n){np[i*3]=p[i*3];np[i*3+1]=p[i*3+1];np[i*3+2]=p[i*3+2];continue;}
+      let sx=0,sy=0,sz=0;
+      for(const j of nb){sx+=p[j*3];sy+=p[j*3+1];sz+=p[j*3+2];}
+      np[i*3  ]=p[i*3  ]+.5*(sx/n-p[i*3  ]);
+      np[i*3+1]=p[i*3+1]+.5*(sy/n-p[i*3+1]);
+      np[i*3+2]=p[i*3+2]+.5*(sz/n-p[i*3+2]);
+    }
+    p.set(np);
+  }
+
+  // ── 5. Write smoothed positions back to flat array ───────────────────
+  const R=new Float32Array(V.length);
+  for(let i=0;i<N;i++){const c=v2u[i];R[i*3]=p[c*3];R[i*3+1]=p[c*3+1];R[i*3+2]=p[c*3+2];}
+  return R;
+}
+
+/* ================================================================
    SPATIAL HASH BOND DETECTION
    ================================================================ */
 function detectBonds(atoms,maxD=0.195){
@@ -715,8 +770,15 @@ class BioLabXR{
     let maxD=0;
     atoms.forEach(a=>{const d=Math.sqrt((a.x-cx)**2+(a.y-cy)**2+(a.z-cz)**2);if(d>maxD)maxD=d;});
     const sc=Math.min(2.0/(maxD||1),6);
-    this.target.set(cx*sc,cy*sc,cz*sc);
-    this.radius=2.8+sc*.5;this.updateOrbit();
+    // Atoms are placed at (a.x-cx)*sc → molecule center is at display origin (0,0,0)
+    // Reset radius ONLY when a new molecule is loaded — preserve zoom on mode/color switch
+    if(this._lastPdb!==this.pdbId){
+      this._lastPdb=this.pdbId;
+      // Use same values as resetView() so initial display matches reset state
+      this.theta=0; this.phi=1.1; this.radius=5;
+      this.target.set(0,0,0);
+    }
+    this.updateOrbit();
 
     switch(this.mode){
       case 'lines':   this.buildLines  (atoms,cx,cy,cz,sc);break;
@@ -1278,96 +1340,101 @@ class BioLabXR{
      ────────────────────────────────────────────────────────────────
      1. buildSESField  – union SDF on adaptive 3D grid (nm units)
      2. marchingTets   – Marching Tetrahedra, f=0 isosurface
-     3. Color          – nearest atom via spatial hash O(1)
-     4. Normals        – analytical outward from nearest atom
-        (= exact SDF gradient at the Connolly surface)
+     3. smoothSurface  – 3× Laplacian (PyMOL smooth() passes)
+     4. Color          – nearest atom via spatial hash O(1)
+     5. Normals        – analytical outward from nearest atom
      ================================================================ */
   buildSurface(atoms,cx,cy,cz,sc){
     document.getElementById('i-bonds').textContent='—';
     const noH=atoms.filter(a=>a.el!=='H');
     this._showAtoms=noH;
 
-    // Adaptive cell size: target ~65 grid cells per longest axis
+    // Adaptive cell size: target ~80 cells/side (PyMOL default ≈ 0.5Å)
+    // Standard 0.70Å, Hi-Q 0.50Å — Laplacian smoothing removes grid faceting
     const ext=noH.reduce((m,a)=>Math.max(m,
       Math.abs(a.x-cx),Math.abs(a.y-cy),Math.abs(a.z-cz)),0)*2;
-    const baseCS=this._sesHiQ?0.065:0.090;          // nm/cell
-    const CS=Math.max(baseCS,Math.min(0.18,ext/65));
+    const baseCS=this._sesHiQ?0.050:0.070;         // nm/cell
+    const CS=Math.max(baseCS,Math.min(0.12,ext/80));
 
     this.setLoad(true,'SES: フィールド計算中...');
     this.setStatus('COMPUTING CONNOLLY SURFACE...');
 
-    // Three rAF steps to keep loading overlay visible between heavy work
+    // Four rAF steps — each updates the loading overlay between heavy work
     requestAnimationFrame(()=>{
       const probe=0.140;       // 1.40 Å — PyMOL default water probe
       const fd=buildSESField(noH,probe,CS);
 
       this.setLoad(true,`SES: メッシュ生成中 (${fd.nx}×${fd.ny}×${fd.nz})...`);
       requestAnimationFrame(()=>{
-        const rawV=marchingTets(fd);
-        const nTri=rawV.length/9;
-        if(!nTri){this.setLoad(false);this.setStatus('SES: 面なし');return;}
+        const raw0=marchingTets(fd);
+        if(!raw0.length){this.setLoad(false);this.setStatus('SES: 面なし');return;}
 
-        this.setLoad(true,`SES: カラーリング中 (${Math.round(nTri).toLocaleString()} 面)...`);
+        // ── Laplacian smoothing (3 passes, λ=0.5 — same as PyMOL) ───
+        this.setLoad(true,`SES: スムージング中 (${Math.round(raw0.length/9).toLocaleString()} 面)...`);
         requestAnimationFrame(()=>{
+          const rawV=smoothSurface(raw0,3);
+          const nTri=rawV.length/9;
 
-          // ── Scale nm → display coords ─────────────────────────────
-          const N=rawV.length/3;
-          const sv=new Float32Array(rawV.length);
-          for(let i=0;i<rawV.length;i+=3){
-            sv[i  ]=(rawV[i  ]-cx)*sc;
-            sv[i+1]=(rawV[i+1]-cy)*sc;
-            sv[i+2]=(rawV[i+2]-cz)*sc;}
+          this.setLoad(true,`SES: カラーリング中 (${Math.round(nTri).toLocaleString()} 面)...`);
+          requestAnimationFrame(()=>{
 
-          // ── Spatial hash for O(1) nearest-atom lookup ─────────────
-          // Grid cell = 0.7 nm physical → ±1 search covers > probe+VDW
-          const ags=0.70*sc;
-          const ag=new Map();
-          const sa=noH.map((a,i)=>({...a,xs:(a.x-cx)*sc,ys:(a.y-cy)*sc,zs:(a.z-cz)*sc,i}));
-          sa.forEach(a=>{
-            const k=`${Math.floor(a.xs/ags)}|${Math.floor(a.ys/ags)}|${Math.floor(a.zs/ags)}`;
-            (ag.has(k)?ag.get(k):ag.set(k,[]).get(k)).push(a.i);});
-          const nearest=(px,py,pz)=>{
-            const gx=Math.floor(px/ags),gy=Math.floor(py/ags),gz=Math.floor(pz/ags);
-            let md=Infinity,bi=0;
-            for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){
-              const nb=ag.get(`${gx+dx}|${gy+dy}|${gz+dz}`)||[];
-              for(const i of nb){const a=sa[i];
-                const d=(px-a.xs)**2+(py-a.ys)**2+(pz-a.zs)**2;
-                if(d<md){md=d;bi=i;}}}
-            return sa[bi];};
+            // ── Scale nm → display coords ───────────────────────────
+            const N=rawV.length/3;
+            const sv=new Float32Array(rawV.length);
+            for(let i=0;i<rawV.length;i+=3){
+              sv[i  ]=(rawV[i  ]-cx)*sc;
+              sv[i+1]=(rawV[i+1]-cy)*sc;
+              sv[i+2]=(rawV[i+2]-cz)*sc;}
 
-          // ── Per-vertex color + analytical outward normal ──────────
-          const cv=new Float32Array(rawV.length);
-          const nv=new Float32Array(rawV.length);
-          const col=new THREE.Color();
-          for(let vi=0;vi<N;vi++){
-            const px=sv[vi*3],py=sv[vi*3+1],pz=sv[vi*3+2];
-            const na=nearest(px,py,pz);
-            col.setHex(this.getColor(na));
-            cv[vi*3]=col.r;cv[vi*3+1]=col.g;cv[vi*3+2]=col.b;
-            // Outward normal = direction from atom center to surface vertex
-            const nnx=px-na.xs,nny=py-na.ys,nnz=pz-na.zs;
-            const nl=Math.sqrt(nnx*nnx+nny*nny+nnz*nnz)||1;
-            nv[vi*3]=nnx/nl;nv[vi*3+1]=nny/nl;nv[vi*3+2]=nnz/nl;}
+            // ── Spatial hash for O(1) nearest-atom lookup ───────────
+            const ags=0.70*sc;
+            const ag=new Map();
+            const sa=noH.map((a,i)=>({...a,xs:(a.x-cx)*sc,ys:(a.y-cy)*sc,zs:(a.z-cz)*sc,i}));
+            sa.forEach(a=>{
+              const k=`${Math.floor(a.xs/ags)}|${Math.floor(a.ys/ags)}|${Math.floor(a.zs/ags)}`;
+              (ag.has(k)?ag.get(k):ag.set(k,[]).get(k)).push(a.i);});
+            const nearest=(px,py,pz)=>{
+              const gx=Math.floor(px/ags),gy=Math.floor(py/ags),gz=Math.floor(pz/ags);
+              let md=Infinity,bi=0;
+              for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){
+                const nb=ag.get(`${gx+dx}|${gy+dy}|${gz+dz}`)||[];
+                for(const i of nb){const a=sa[i];
+                  const d=(px-a.xs)**2+(py-a.ys)**2+(pz-a.zs)**2;
+                  if(d<md){md=d;bi=i;}}}
+              return sa[bi];};
 
-          // ── Build Three.js mesh ───────────────────────────────────
-          const geo=new THREE.BufferGeometry();
-          geo.setAttribute('position',new THREE.Float32BufferAttribute(sv,3));
-          geo.setAttribute('color',   new THREE.Float32BufferAttribute(cv,3));
-          geo.setAttribute('normal',  new THREE.Float32BufferAttribute(nv,3));
-          const mat=new THREE.MeshPhongMaterial({
-            vertexColors:true,shininess:90,specular:new THREE.Color(0x444444),
-            transparent:true,opacity:this._surfOp??0.82,side:THREE.DoubleSide});
-          this.surfMesh=new THREE.Mesh(geo,mat);
-          this.molGroup.add(this.surfMesh);
+            // ── Per-vertex color + analytical outward normal ─────────
+            const cv=new Float32Array(rawV.length);
+            const nv=new Float32Array(rawV.length);
+            const col=new THREE.Color();
+            for(let vi=0;vi<N;vi++){
+              const px=sv[vi*3],py=sv[vi*3+1],pz=sv[vi*3+2];
+              const na=nearest(px,py,pz);
+              col.setHex(this.getColor(na));
+              cv[vi*3]=col.r;cv[vi*3+1]=col.g;cv[vi*3+2]=col.b;
+              const nnx=px-na.xs,nny=py-na.ys,nnz=pz-na.zs;
+              const nl=Math.sqrt(nnx*nnx+nny*nny+nnz*nnz)||1;
+              nv[vi*3]=nnx/nl;nv[vi*3+1]=nny/nl;nv[vi*3+2]=nnz/nl;}
 
-          document.getElementById('i-bonds').textContent=
-            `${Math.round(nTri).toLocaleString()} faces`;
-          this.setLoad(false);
-          this.setStatus(`SES READY — ${Math.round(nTri).toLocaleString()} tri, CS=${(CS*10).toFixed(1)}Å`);
-        });
-      });
-    });
+            // ── Build Three.js mesh ──────────────────────────────────
+            const geo=new THREE.BufferGeometry();
+            geo.setAttribute('position',new THREE.Float32BufferAttribute(sv,3));
+            geo.setAttribute('color',   new THREE.Float32BufferAttribute(cv,3));
+            geo.setAttribute('normal',  new THREE.Float32BufferAttribute(nv,3));
+            const mat=new THREE.MeshPhongMaterial({
+              vertexColors:true,shininess:90,specular:new THREE.Color(0x444444),
+              transparent:true,opacity:this._surfOp??0.82,side:THREE.DoubleSide});
+            this.surfMesh=new THREE.Mesh(geo,mat);
+            this.molGroup.add(this.surfMesh);
+
+            document.getElementById('i-bonds').textContent=
+              `${Math.round(nTri).toLocaleString()} faces`;
+            this.setLoad(false);
+            this.setStatus(`SES READY — ${Math.round(nTri).toLocaleString()} tri, CS=${(CS*10).toFixed(1)}Å (smoothed×3)`);
+          }); // rAF4: coloring
+        });   // rAF3: smoothing
+      });     // rAF2: marchingTets
+    });       // rAF1: field
   }
 
   /* Surface opacity 0–1 */
@@ -1413,6 +1480,7 @@ class BioLabXR{
 
   resetView(){
     this.theta=0;this.phi=1.1;this.radius=5;
+    this.target.set(0,0,0);
     this.molGroup.rotation.set(0,0,0);this.molGroup.position.set(0,0,0);this.molGroup.scale.setScalar(1);
     this.updateOrbit();
   }
