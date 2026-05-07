@@ -137,6 +137,25 @@ input[type=text]:focus{border-color:var(--cyan)}
       <button class="btn sm" id="rot-btn" onclick="app.toggleRot()">自動回転</button>
     </div>
 
+    <div class="hr"></div>
+    <div class="sec">[ 断面カット ]</div>
+    <div class="g2" style="align-items:center">
+      <button class="btn sm" id="clip-btn" onclick="app.toggleClip()">断面 OFF</button>
+      <button class="btn sm" id="clip-flip" onclick="app.flipClip()" style="display:none">↕ 反転</button>
+    </div>
+    <div id="clip-settings" style="display:none">
+      <div class="sec" style="margin-top:8px">[ 切断軸 ]</div>
+      <div class="g3">
+        <button class="btn sm" id="clip-ax-x" onclick="app.setClipAxis('x')">X 軸</button>
+        <button class="btn sm active" id="clip-ax-y" onclick="app.setClipAxis('y')">Y 軸</button>
+        <button class="btn sm" id="clip-ax-z" onclick="app.setClipAxis('z')">Z 軸</button>
+      </div>
+      <div class="sec" style="margin-top:8px">[ 位置 ]</div>
+      <input type="range" id="clip-slider" min="-100" max="100" value="0"
+        oninput="app.setClipPos(this.value/100)"
+        style="width:100%;margin:6px 0;accent-color:var(--cyan);cursor:pointer">
+    </div>
+
     <div id="ses-ctrl" style="display:none">
       <div class="hr"></div>
       <div class="sec">[ 透明度 ]</div>
@@ -529,6 +548,9 @@ class BioLabXR{
     this.overlayMode='cartoon';   // mode shown inside semi-transparent surface
     this.overlayGroup=null;       // separate THREE.Group for overlay meshes
     this._cx=0;this._cy=0;this._cz=0;this._sc=1; // cached centering values
+    // Cross-section clipping state
+    this.clipEnabled=false;this.clipAxis='y';this.clipFlipped=false;this.clipPos=0;
+    this.clipPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
     this.init();
   }
 
@@ -558,6 +580,17 @@ class BioLabXR{
     this.molGroup=new THREE.Group();this.scene.add(this.molGroup);
     this.overlayGroup=new THREE.Group();this.molGroup.add(this.overlayGroup);
     this.ray=new THREE.Raycaster();this.mouse=new THREE.Vector2();
+
+    // Enable per-material clipping (required for localClippingEnabled)
+    this.ren.localClippingEnabled=true;
+
+    // Clip plane indicator: semi-transparent disc showing the cut position
+    const indGeo=new THREE.CircleGeometry(4,64);
+    const indMat=new THREE.MeshBasicMaterial({
+      color:0x00e5c8,transparent:true,opacity:0.12,side:THREE.DoubleSide,depthWrite:false});
+    this.clipIndicator=new THREE.Mesh(indGeo,indMat);
+    this.clipIndicator.visible=false;
+    this.scene.add(this.clipIndicator);
 
     this.setupVR();this.setupEvents();
     initVRButton(this.ren);
@@ -1506,6 +1539,81 @@ class BioLabXR{
       else ch.material?.dispose();
       this.overlayGroup.remove(ch);
     }
+  }
+
+  /* ================================================================
+     CROSS-SECTION CLIPPING
+     Three.js renderer.clippingPlanes clips every rendered object.
+     localClippingEnabled=true allows per-material override if needed.
+     ================================================================ */
+
+  /* Toggle clipping on/off */
+  toggleClip(){
+    this.clipEnabled=!this.clipEnabled;
+    const btn=document.getElementById('clip-btn');
+    if(btn){btn.textContent=`断面 ${this.clipEnabled?'ON':'OFF'}`;
+      btn.classList.toggle('active',this.clipEnabled);}
+    document.getElementById('clip-settings').style.display=this.clipEnabled?'block':'none';
+    document.getElementById('clip-flip').style.display=this.clipEnabled?'inline-block':'none';
+    if(this.clipEnabled)this._updateClipPlane();
+    this._applyClipPlane();
+    this._updateClipIndicator();
+  }
+
+  /* Set cut axis (x/y/z) */
+  setClipAxis(axis){
+    this.clipAxis=axis;
+    ['x','y','z'].forEach(a=>document.getElementById(`clip-ax-${a}`)?.classList.remove('active'));
+    document.getElementById(`clip-ax-${axis}`)?.classList.add('active');
+    this._updateClipPlane();this._applyClipPlane();this._updateClipIndicator();
+  }
+
+  /* Slider position: t ∈ [-1, +1] maps to [-3, +3] display units */
+  setClipPos(t){
+    this.clipPos=t*3;
+    this._updateClipPlane();this._applyClipPlane();this._updateClipIndicator();
+  }
+
+  /* Invert which half is hidden */
+  flipClip(){
+    this.clipFlipped=!this.clipFlipped;
+    const btn=document.getElementById('clip-flip');
+    if(btn)btn.classList.toggle('active',this.clipFlipped);
+    this._updateClipPlane();this._applyClipPlane();
+  }
+
+  /* Recompute THREE.Plane from current axis/pos/flip state */
+  _updateClipPlane(){
+    const ax={x:[1,0,0],y:[0,1,0],z:[0,0,1]}[this.clipAxis]||[0,1,0];
+    const s=this.clipFlipped?-1:1;
+    this.clipPlane.normal.set(ax[0]*s,ax[1]*s,ax[2]*s);
+    // Plane eq: n·p + c = 0  →  clips where n·p + c < 0
+    // We want to clip where (axis component) < clipPos
+    //   n·p < clipPos  →  c = -clipPos*s
+    this.clipPlane.constant=-this.clipPos*s;
+  }
+
+  /* Apply/remove clipping planes to renderer (affects all rendered objects) */
+  _applyClipPlane(){
+    this.ren.clippingPlanes=this.clipEnabled?[this.clipPlane]:[];
+  }
+
+  /* Move/orient the semi-transparent disc indicator */
+  _updateClipIndicator(){
+    if(!this.clipIndicator)return;
+    this.clipIndicator.visible=this.clipEnabled;
+    if(!this.clipEnabled)return;
+    const p=this.clipPos;
+    // Position along the axis
+    this.clipIndicator.position.set(
+      this.clipAxis==='x'?p:0,
+      this.clipAxis==='y'?p:0,
+      this.clipAxis==='z'?p:0);
+    // Orient perpendicular to the cut axis
+    this.clipIndicator.rotation.set(
+      this.clipAxis==='y'?-Math.PI/2:0,
+      this.clipAxis==='x'? Math.PI/2:0,
+      0);
   }
 
   /* Surface quality: hi=0.65Å cell, med=0.90Å (default) */
