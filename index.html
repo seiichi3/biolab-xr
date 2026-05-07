@@ -556,7 +556,7 @@ class BioLabXR{
     grid.position.y=-2.5;this.scene.add(grid);
 
     this.molGroup=new THREE.Group();this.scene.add(this.molGroup);
-    this.overlayGroup=new THREE.Group();this.scene.add(this.overlayGroup);
+    this.overlayGroup=new THREE.Group();this.molGroup.add(this.overlayGroup);
     this.ray=new THREE.Raycaster();this.mouse=new THREE.Vector2();
 
     this.setupVR();this.setupEvents();
@@ -759,10 +759,11 @@ class BioLabXR{
     }
   }
 
-  /* ── Clear molecule group ── */
+  /* ── Clear molecule group (keep overlayGroup intact) ── */
   clearMol(){
-    while(this.molGroup.children.length){
-      const ch=this.molGroup.children[0];
+    // Remove all children EXCEPT overlayGroup (which must stay attached to molGroup)
+    const toRemove=[...this.molGroup.children].filter(ch=>ch!==this.overlayGroup);
+    for(const ch of toRemove){
       ch.geometry?.dispose();
       if(Array.isArray(ch.material))ch.material.forEach(m=>m.dispose());else ch.material?.dispose();
       this.molGroup.remove(ch);
