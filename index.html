@@ -1595,7 +1595,9 @@ class BioLabXR{
 
   /* Apply/remove clipping planes to renderer (affects all rendered objects) */
   _applyClipPlane(){
-    this.ren.clippingPlanes=this.clipEnabled?[this.clipPlane]:[];
+    // Clipping disabled for Spheres mode (InstancedMesh + clipping has visual issues)
+    const active=this.clipEnabled&&this.mode!=='spheres';
+    this.ren.clippingPlanes=active?[this.clipPlane]:[];
   }
 
   /* Move/orient the semi-transparent disc indicator */
@@ -1642,6 +1644,8 @@ class BioLabXR{
     const sc=document.getElementById('ses-ctrl');
     if(sc)sc.style.display=(m==='surface')?'block':'none';
     if(this.atoms.length)this.buildMol(this.atoms);
+    // Re-evaluate clipping (disabled for Spheres)
+    this._applyClipPlane();
   }
 
   setCS(s){
